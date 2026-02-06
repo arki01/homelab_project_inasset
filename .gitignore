@@ -17,5 +17,3 @@ models/
 
 # 데이터셋
 data/
-*.csv
-*.json
