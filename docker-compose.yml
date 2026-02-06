@@ -1,0 +1,17 @@
+version: '3.8'
+
+services:
+  money-ai:
+    image: python:3.11-slim
+    container_name: money_ai_app
+    volumes:
+      - .:/app
+    working_dir: /app
+    ports:
+      - "3100:8501"
+    environment:
+      - TZ=Asia/Seoul
+    command: >
+      sh -c "pip install --no-cache-dir -r requirements.txt && 
+             streamlit run src/app.py --server.address=0.0.0.0"
+    restart: always
