@@ -6,3 +6,4 @@ langchain-community
 openai
 python-dotenv
 tabulate
+plotly
