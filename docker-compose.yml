@@ -1,17 +1,19 @@
 version: '3.8'
 
 services:
-  money-ai:
+  inasset-app:  
     image: python:3.11-slim
-    container_name: money_ai_app
+    container_name: inasset
     volumes:
       - .:/app
     working_dir: /app
     ports:
-      - "3100:8501"
+      - "3101:8501" 
     environment:
       - TZ=Asia/Seoul
+      - STREAMLIT_SERVER_PORT=8501
+      - STREAMLIT_SERVER_ADDRESS=0.0.0.0
     command: >
       sh -c "pip install --no-cache-dir -r requirements.txt && 
-             streamlit run src/app.py --server.address=0.0.0.0"
+             streamlit run src/app.py"
     restart: always
