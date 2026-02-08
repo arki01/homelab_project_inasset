@@ -78,7 +78,7 @@ if current_menu == "1. 가계부 업로드":
             upload_mode = st.radio(
                 "업로드 기간 설정",
                 ["전체 기간", "특정 기간 (기본값: 현재 ~ 1개월 전)"],
-                index=1, horizontal=True,
+                index=0, horizontal=True,
                 help="파일 전체를 올릴지, 최근 내역만 골라 올릴지 선택하세요."
             )
             
