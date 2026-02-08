@@ -1,6 +1,7 @@
 import sqlite3
 import pandas as pd
 import os
+import re
 
 # DB 경로 및 파일명 변경 (InAsset의 아이덴티티 반영)
 DB_PATH = "data/inasset_v1.db"
@@ -11,8 +12,10 @@ def _init_db():
         os.makedirs(directory, exist_ok=True)
 
     with sqlite3.connect(DB_PATH) as conn:
-        # 뱅크샐러드 엑셀 구조를 반영한 신규 테이블 스키마
-        conn.execute("""
+        cursor = conn.cursor()
+
+        # 1. 뱅크샐러드 엑셀 구조를 반영한 신규 테이블 스키마
+        cursor.execute("""
             CREATE TABLE IF NOT EXISTS transactions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 date TEXT,          -- 날짜는 필수 (YYYY-MM-DD)
@@ -20,29 +23,35 @@ def _init_db():
                 tx_type TEXT,       -- 타입 (수입/지출)
                 category_1 TEXT,    -- 대분류
                 category_2 TEXT,    -- 소분류
+                refined_category_1 TEXT, -- 표준화 대분류 (분석용)
+                refined_category_2 TEXT, -- 표준화 소분류 (분석용)
                 description TEXT,   -- 내용
                 amount INTEGER,     -- 금액
                 currency TEXT,      -- 화폐
                 source TEXT,        -- 결제수단
                 memo TEXT,          -- 메모
                 owner TEXT,         -- 소유자 (남편/아내/공동)
+                is_fixed_cost BOOLEAN,  -- 고정비 여부 (0 or 1)
+                source_file TEXT        -- 데이터 출처 파일명
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
 
-        # # 2. 자산 스냅샷 테이블 (Asset Snapshots)
-        # conn.execute("""
-        #     CREATE TABLE IF NOT EXISTS asset_snapshots (
-        #         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        #         base_date TEXT,     -- 기준 일자
-        #         asset_type TEXT,    -- 자산 종류 (예적금, 주식, 현금)
-        #         asset_name TEXT,    -- 자산명 (신한은행, 삼성전자)
-        #         balance INTEGER,    -- 잔액
-        #         owner TEXT          -- 소유자
-        #     )
-        # """)
+        # 2. 자산 스냅샷 테이블 (Asset Snapshots)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS asset_snapshots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                snapshot_date TEXT, 
+                balance_type TEXT,  -- 구분 (자산/부채)
+                asset_type TEXT,    -- 항목 (예: 자유입출금 자산, 신탁 자산, 저축성 자산 등)
+                account_name TEXT,  -- 상품명 (예: 신한 주거래 우대통장)
+                amount INTEGER,     -- 금액
+                owner TEXT,         
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
 
-def save_transactions(df, owner="공동"):
+def save_transactions(df, owner="공동", filename="unknown.xlsx"):
     """
     지정된 기간과 소유자에 해당하는 기존 데이터를 삭제한 후, 새로운 데이터를 저장합니다.
     """
@@ -63,7 +72,9 @@ def save_transactions(df, owner="공동"):
     }
     
     rename_df = df.rename(columns=mapping).copy()
+
     rename_df['owner'] = owner
+    rename_df['source_file'] = filename
     rename_df['date'] = pd.to_datetime(rename_df['date']).dt.strftime('%Y-%m-%d')
     rename_df['time'] = pd.to_datetime(rename_df['time'], errors='coerce').dt.strftime('%H:%M')
     rename_df['time'] = rename_df['time'].fillna('00:00')
@@ -92,7 +103,79 @@ def save_transactions(df, owner="공동"):
         final_df.to_sql('transactions', conn, if_exists='append', index=False)
         conn.commit()
 
+
+def init_category_rules():
+    """
+    고정비/변동비 규칙 테이블을 생성하고 데이터를 정의합니다.
+    """
+    # DB 경로가 올바른지 확인 (현재 db_handler.py 위치 기준 상대 경로 보정)
+    # 실행 위치에 따라 경로 에러가 날 수 있어 절대 경로로 보정하는 것이 안전합니다.
+    base_dir = os.path.dirname(os.path.abspath(__file__)) # utils 폴더
+    db_path_fixed = os.path.join(base_dir, '../../data/inasset_v1.db')
     
+    with sqlite3.connect(db_path_fixed) as conn:
+        cursor = conn.cursor()
+
+        # 1. 규칙 테이블 생성
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS category_rules (
+            category_name TEXT PRIMARY KEY, 
+            expense_type TEXT
+        )
+        ''')
+
+        # 2. 분류 규칙 정의 (엑셀 기준)
+        rules = [
+            # [고정 지출]
+            ('고정비', '고정 지출'), ('주거비', '고정 지출'), 
+            ('금융', '고정 지출'), ('보험', '고정 지출'),
+            # [변동 지출]
+            ('식비', '변동 지출'), ('생활비', '변동 지출'),
+            ('활동비', '변동 지출'), ('친목비', '변동 지출'),
+            ('꾸밈비', '변동 지출'), ('차량비', '변동 지출'),
+            ('교통비', '변동 지출'), ('여행비', '변동 지출'),
+            ('의료비', '변동 지출'), ('기여비', '변동 지출'),
+            ('양육비', '변동 지출'), ('예비비', '변동 지출'),
+            ('미분류', '변동 지출'),
+        ]
+
+        # 규칙 업데이트 (이미 있으면 무시하거나 덮어쓰기)
+        cursor.executemany('INSERT OR REPLACE INTO category_rules VALUES (?, ?)', rules)
+        conn.commit()
+
+def get_analyzed_transactions():
+    """
+    transactions 테이블과 category_rules를 조인하여 
+    고정비/변동비가 마킹된 데이터를 반환합니다.
+    """
+    # 경로 보정
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    db_path_fixed = os.path.join(base_dir, '../../data/inasset_v1.db')
+
+    if not os.path.exists(db_path_fixed):
+        return pd.DataFrame() # 빈 데이터프레임 반환
+
+    with sqlite3.connect(db_path_fixed) as conn:
+        # JOIN 쿼리: 원본 transactions 테이블은 건드리지 않고 읽어올 때만 합칩니다.
+        # category_1 (대분류)을 기준으로 규칙을 찾습니다.
+        query = '''
+        SELECT 
+            T.date,
+            T.time,
+            T.category_1,
+            T.description,
+            T.amount,
+            T.owner,
+            IFNULL(R.expense_type, '미분류') as expense_type
+        FROM transactions T
+        LEFT JOIN category_rules R ON T.category_1 = R.category_name
+        WHERE T.tx_type = '지출'
+        ORDER BY T.date DESC, T.time DESC
+        '''
+        
+        df = pd.read_sql_query(query, conn)
+        return df
+
 # def save_asset_snapshot(date, asset_data_list):
 #     """특정 시점의 전체 자산 상태 저장"""
 #     # asset_data_list: [{'asset_name': '신한', 'balance': 5000, 'owner': '남편'}, ...]

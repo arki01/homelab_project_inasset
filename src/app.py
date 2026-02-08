@@ -1,3 +1,4 @@
+from fileinput import filename
 import streamlit as st
 import pandas as pd
 import os
@@ -6,11 +7,12 @@ import time
 
 from dotenv import load_dotenv
 from utils.db_handler import DB_PATH, _init_db, save_transactions
-from utils.file_handler import process_uploaded_zip, format_df_for_display
+from utils.db_handler import DB_PATH, _init_db, save_transactions, init_category_rules, get_analyzed_transactions
 
 # 1. 페이지 설정 및 DB 초기화
 st.set_page_config(page_title="InAsset MVP", layout="wide", page_icon="🏛️")
 _init_db()
+init_category_rules()
 
 # 모바일 최적화 및 PWA 설정 메타 태그
 st.markdown("""
@@ -59,7 +61,7 @@ current_menu = st.session_state.menu
 
 if current_menu == "1. 가계부 업로드":
     st.header("📥 가계부 데이터 업로드")
-    st.write("우리 부부의 가계부 기록을 통합하는 첫 단계입니다.")
+    st.caption("우리 부부의 가계부 기록을 통합하는 첫 단계입니다.")
 
     with st.container(border=True):
         uploaded_file = st.file_uploader("뱅크샐러드 ZIP 파일을 업로드하세요", type=None)
@@ -125,16 +127,25 @@ if current_menu == "1. 가계부 업로드":
 
             # 저장 버튼 클릭 시 선택한 owner 값을 함께 전달
             if st.button(f"{owner}님 명의로 저장", type="secondary",use_container_width=True):
-                save_transactions(display_df, owner=owner)
+                try:
+                    filename = st.session_state.get('uploaded_filename', 'unknown.zip')
+                    count = save_transactions(
+                        st.session_state['temp_df'], 
+                        owner=owner, 
+                        filename=filename
+                    )
+                    if count > 0:
+                        # 결과 메시지 계산을 위해 날짜 추출
+                        min_d = st.session_state['temp_df']['날짜'].min().strftime('%Y-%m-%d')
+                        max_d = st.session_state['temp_df']['날짜'].max().strftime('%Y-%m-%d')
 
-                # 결과 메시지 계산을 위해 날짜 추출
-                min_d = st.session_state['temp_df']['날짜'].min().strftime('%Y-%m-%d')
-                max_d = st.session_state['temp_df']['날짜'].max().strftime('%Y-%m-%d')
-
-                st.balloons()
-                st.success(f"{owner}님의 {min_d}부터 {max_d}까지의 내역이 DB에 안전하게 저장되었습니다.")
-                del st.session_state['temp_df'] # 저장 후 캐시 삭제
-    
+                        st.balloons()
+                        st.success(f"{owner}님의 {min_d}부터 {max_d}까지의 내역이 DB에 안전하게 저장되었습니다.")
+                        del st.session_state['temp_df'] # 저장 후 캐시 삭제
+                    else:
+                        st.warning("저장된 데이터가 0건입니다.")
+                except Exception as e:
+                        st.error(f"저장 중 오류가 발생했습니다: {e}")
     st.divider()
 
     # --- [1. 팝업창 함수 정의] ---
@@ -174,13 +185,48 @@ if current_menu == "1. 가계부 업로드":
 
 elif current_menu == "2. 자산 조회":
     st.header("📈 자산 조회")
-    st.info("현재 자산 분포와 시간에 따른 흐름을 시각적으로 확인합니다.")
+    st.caption("현재 자산 분포와 시간에 따른 흐름을 시각적으로 확인합니다.")
     # 여기에 차트 라이브러리(Plotly/Altair) 연동 예정
 
 elif current_menu == "3. 수입/지출현황 조회":
     st.header("📊 수입/지출현황 조회")
-    st.write("표준화된 카테고리로 정리된 상세 내역입니다.")
+    st.caption("표준화된 카테고리로 정리된 상세 내역입니다.")
     # DB 조회 로직 구현부
+
+    # 1. 데이터 가져오기
+    df_analyzed = get_analyzed_transactions()
+
+    if df_analyzed.empty:
+        st.info("데이터가 없습니다. 먼저 [1. 가계부 업로드] 메뉴에서 엑셀 파일을 저장해주세요.")
+    else:
+        # 2. 요약 통계 보여주기 (컬럼 2개로 분할)
+        col1, col2 = st.columns(2)
+        
+        # 고정 지출 합계
+        fixed_cost = df_analyzed[df_analyzed['expense_type'] == '고정 지출']['amount'].sum()
+        with col1:
+            st.metric(label="이번 달 고정 지출 (예상)", value=f"{fixed_cost:,.0f}원")
+
+        # 변동 지출 합계
+        variable_cost = df_analyzed[df_analyzed['expense_type'] == '변동 지출']['amount'].sum()
+        with col2:
+            st.metric(label="이번 달 변동 지출", value=f"{variable_cost:,.0f}원")
+
+        st.divider()
+
+        # 3. 데이터 탭 (상세 내역 vs 카테고리별 차트)
+        tab1, tab2 = st.tabs(["📝 상세 내역", "📈 지출 구조"])
+        
+        with tab1:
+            st.dataframe(df_analyzed, use_container_width=True, hide_index=True)
+            
+        with tab2:
+            # 간단한 바 차트 (판다스 내장 기능 활용)
+            st.caption("고정비 vs 변동비 비중")
+            
+            # 타입별 합계 계산
+            chart_data = df_analyzed.groupby('expense_type')['amount'].sum()
+            st.bar_chart(chart_data)
 
 elif current_menu == "4. 분석 리포트":
     st.header("📋 AI 분석 리포트")
