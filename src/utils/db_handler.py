@@ -31,8 +31,6 @@ def _init_db():
                 source TEXT,        -- 결제수단
                 memo TEXT,          -- 메모
                 owner TEXT,         -- 소유자 (남편/아내/공동)
-                is_fixed_cost BOOLEAN,  -- 고정비 여부 (0 or 1)
-                source_file TEXT        -- 데이터 출처 파일명
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -51,7 +49,7 @@ def _init_db():
             )
         """)
 
-def save_transactions(df, owner="공동", filename="unknown.xlsx"):
+def save_transactions(df, owner=None, filename="unknown.xlsx"):
     """
     지정된 기간과 소유자에 해당하는 기존 데이터를 삭제한 후, 새로운 데이터를 저장합니다.
     """
@@ -103,6 +101,7 @@ def save_transactions(df, owner="공동", filename="unknown.xlsx"):
         final_df.to_sql('transactions', conn, if_exists='append', index=False)
         conn.commit()
 
+    return len(final_df)    
 
 def init_category_rules():
     """
@@ -176,14 +175,77 @@ def get_analyzed_transactions():
         df = pd.read_sql_query(query, conn)
         return df
 
-# def save_asset_snapshot(date, asset_data_list):
-#     """특정 시점의 전체 자산 상태 저장"""
-#     # asset_data_list: [{'asset_name': '신한', 'balance': 5000, 'owner': '남편'}, ...]
-#     df = pd.DataFrame(asset_data_list)
-#     df['base_date'] = date
-#     with sqlite3.connect(DB_PATH) as conn:
-#         df.to_sql('asset_snapshots', conn, if_exists='append', index=False)
+def save_asset_snapshot(df, owner=None, snapshot_date=None):
+    """
+    추출된 자산 데이터를 asset_snapshots 테이블에 저장합니다.
+    
+    Args:
+        df: 자산 데이터프레임 (owner 컬럼 포함 권장)
+        owner: 소유자 (df에 owner가 없을 때만 사용)
+        snapshot_date: 스냅샷 날짜 (YYYY-MM-DD HH:MM:SS 형식)
+    """
+    _init_db() # 테이블이 없으면 생성
+    
+    df = df.copy()
+    
+    # 1. 데이터프레임에 공통 정보(소유자, 날짜) 추가
+    # df에 owner가 없을 때만 파라미터 값 사용
+    if 'owner' not in df.columns or df['owner'].isna().all():
+        df['owner'] = owner
+    
+    # snapshot_date는 항상 파라미터로부터 사용 (최신 날짜로)
+    if snapshot_date:
+        df['snapshot_date'] = snapshot_date
+    
+    # 2. DB 저장
+    with sqlite3.connect(DB_PATH) as conn:
+        # 데이터가 많지 않으므로 append 방식으로 계속 누적 (스냅샷이므로)
+        df.to_sql('asset_snapshots', conn, if_exists='append', index=False)
+        conn.commit()
+    
+    return len(df)
 
+def get_latest_assets():
+    """
+    가장 최근 날짜의 자산 스냅샷 정보를 가져옵니다.
+    """
+    if not os.path.exists(DB_PATH):
+        return pd.DataFrame()
+
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    # 1. asset_snapshots 테이블이 있는지 먼저 확인
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='asset_snapshots'")
+    if not cursor.fetchone():
+        conn.close()
+        return pd.DataFrame() # 테이블이 없으면 빈 DF 반환
+
+    # 2. 가장 최근 스냅샷 날짜 찾기
+    cursor.execute("SELECT MAX(snapshot_date) FROM asset_snapshots")
+    result = cursor.fetchone()
+    last_date = result[0] if result else None
+    
+    if not last_date:
+        conn.close()
+        return pd.DataFrame()
+
+    # 3. 해당 날짜의 모든 자산/부채 내역 가져오기
+    query = """
+    SELECT 
+        owner, 
+        balance_type, 
+        asset_type, 
+        account_name, 
+        amount,
+        snapshot_date
+    FROM asset_snapshots 
+    WHERE snapshot_date = ?
+    ORDER BY balance_type DESC, amount DESC
+    """
+    df = pd.read_sql_query(query, conn, params=(last_date,))
+    conn.close()
+    return df
 
 
 # ## 변경전 정의 함수

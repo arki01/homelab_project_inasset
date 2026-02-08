@@ -6,8 +6,8 @@ import datetime
 import time
 
 from dotenv import load_dotenv
-from utils.db_handler import DB_PATH, _init_db, save_transactions
-from utils.db_handler import DB_PATH, _init_db, save_transactions, init_category_rules, get_analyzed_transactions
+from utils.db_handler import DB_PATH, _init_db, save_transactions, init_category_rules, get_analyzed_transactions, get_latest_assets, save_asset_snapshot
+from utils.file_handler import process_uploaded_zip, format_df_for_display
 
 # 1. 페이지 설정 및 DB 초기화
 st.set_page_config(page_title="InAsset MVP", layout="wide", page_icon="🏛️")
@@ -103,14 +103,28 @@ if current_menu == "1. 가계부 업로드":
             if upload_mode == "특정 기간 (기본값: 현재 ~ 1개월 전)" and len(upload_period) == 2:
                 s_date, e_date = upload_period
 
-            df, error = process_uploaded_zip(uploaded_file, password, start_date=s_date, end_date=e_date)
+            tx_df, asset_df, error = process_uploaded_zip(uploaded_file, password, start_date=s_date, end_date=e_date)
+
             if error:
                 st.error(f"❌ {error}")
-            elif df is None or df.empty:
+            elif tx_df is None or tx_df.empty:
                 st.warning("⚠️ 해당 기간에 일치하는 데이터가 없습니다.")
             else:
-                st.session_state['temp_df'] = df
-                st.success(f"✅ {owner}님의 가계부 내역을 성공적으로 불러왔습니다. 아래 내역을 확인 후 저장하기를 눌러주세요.")
+                # 자산 데이터 상태 확인 (디버깅용)
+                st.info(f"📊 파일 분석 결과:\n- 거래 내역: {len(tx_df)}건\n- 자산 데이터: {'있음' if asset_df is not None else 'None'}")
+                if asset_df is not None:
+                    st.info(f"- 자산 데이터 건수: {len(asset_df)}건 (비었음: {asset_df.empty})")
+                    if not asset_df.empty:
+                        st.write("✅ 자산 데이터 미리보기:")
+                        st.dataframe(asset_df.head(10), use_container_width=True)
+                
+                st.session_state['temp_df'] = tx_df       # 지출 내역 세션 저장
+                if asset_df is not None and not asset_df.empty:
+                    st.session_state['temp_asset_df'] = asset_df  # 자산 내역도 세션에 저장 (임시)
+                    st.success(f"✅ {owner}님의 가계부 내역을 성공적으로 불러왔습니다. 자산 정보 {len(asset_df)}건도 함께 로드됨.")
+                else:
+                    st.warning("⚠️ 자산 데이터를 찾을 수 없습니다.")
+                    st.success(f"✅ {owner}님의 가계부 내역을 성공적으로 불러왔습니다. (자산 정보 없음)")
 
         # 분석된 데이터가 세션에 있을 때만 저장 버튼 표시
         if 'temp_df' in st.session_state:
@@ -129,23 +143,53 @@ if current_menu == "1. 가계부 업로드":
             if st.button(f"{owner}님 명의로 저장", type="secondary",use_container_width=True):
                 try:
                     filename = st.session_state.get('uploaded_filename', 'unknown.zip')
-                    count = save_transactions(
+
+                    # 1. 가계부 지출/수입 내역 저장
+                    tx_count = save_transactions(
                         st.session_state['temp_df'], 
                         owner=owner, 
                         filename=filename
                     )
-                    if count > 0:
-                        # 결과 메시지 계산을 위해 날짜 추출
+                    
+                    # 2. 자산 현황 스냅샷 저장 (★ 추가된 부분)
+                    asset_count = 0
+                    if 'temp_asset_df' in st.session_state:
+                        temp_asset = st.session_state['temp_asset_df']
+                        if temp_asset is not None and not temp_asset.empty:
+                            # [변경] 날짜(YYYY-MM-DD) -> 일시(YYYY-MM-DD HH:MM:SS)
+                            # now_str 예시: '2024-02-08 15:30:45'
+                            now_str = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                            
+                            asset_count = save_asset_snapshot(
+                                temp_asset,
+                                owner=owner,
+                                snapshot_date=now_str
+                            )
+                        else:
+                            print("⚠️ temp_asset_df가 비어있거나 None입니다.")
+                    else:
+                        print("⚠️ temp_asset_df가 세션에 없습니다.")
+
+                    # 3. 결과 메시지 및 초기화
+                    if tx_count > 0 or asset_count > 0:
+                        # 날짜 범위 (메시지용)
                         min_d = st.session_state['temp_df']['날짜'].min().strftime('%Y-%m-%d')
                         max_d = st.session_state['temp_df']['날짜'].max().strftime('%Y-%m-%d')
 
                         st.balloons()
-                        st.success(f"{owner}님의 {min_d}부터 {max_d}까지의 내역이 DB에 안전하게 저장되었습니다.")
-                        del st.session_state['temp_df'] # 저장 후 캐시 삭제
+                        st.success(f"✅ {owner}님의 가계부 내역 {tx_count}건과 자산 정보 {asset_count}건이 저장되었습니다.\n(기간: {min_d} ~ {max_d})")
+                        
+                        # 저장 후 메모리(세션)에서 데이터 삭제
+                        if 'temp_df' in st.session_state: 
+                            del st.session_state['temp_df']
+                        if 'temp_asset_df' in st.session_state: 
+                            del st.session_state['temp_asset_df']
                     else:
-                        st.warning("저장된 데이터가 0건입니다.")
+                        st.warning("⚠️ 저장된 데이터가 0건입니다.")
+
                 except Exception as e:
-                        st.error(f"저장 중 오류가 발생했습니다: {e}")
+                    st.error(f"❌ 저장 중 오류가 발생했습니다: {e}")
+
     st.divider()
 
     # --- [1. 팝업창 함수 정의] ---
@@ -161,13 +205,13 @@ if current_menu == "1. 가계부 업로드":
                 if os.path.exists(DB_PATH):
                     try:
                         os.remove(DB_PATH)
-                        st.success("삭제 완료! 잠시 후 새로고침 됩니다.")
+                        st.success("삭제 완료! 잠시 후 새로고침 됩니다.", use_container_width=True)
                         time.sleep(1.5)
                         st.rerun() # 페이지 새로고침 (팝업도 같이 닫힘)
                     except Exception as e:
                         st.error(f"오류: {e}")
                 else:
-                    st.warning("삭제할 데이터베이스가 없습니다.")
+                    st.warning("삭제할 데이터베이스가 없습니다.", use_container_width=True)
                     time.sleep(1)
                     st.rerun()
 
@@ -188,6 +232,36 @@ elif current_menu == "2. 자산 조회":
     st.caption("현재 자산 분포와 시간에 따른 흐름을 시각적으로 확인합니다.")
     # 여기에 차트 라이브러리(Plotly/Altair) 연동 예정
 
+# db_handler에서 함수 가져오기 (import 확인 필요)
+    df_assets = get_latest_assets()
+
+    if df_assets.empty:
+        st.info("기록된 자산 스냅샷이 없습니다. 가계부 업로드 시 자산 정보도 함께 저장되도록 구현이 필요합니다.")
+    else:
+        # 1. 상단 요약 (자산 vs 부채)
+        total_asset = df_assets[df_assets['balance_type'] == '자산']['amount'].sum()
+        total_debt = df_assets[df_assets['balance_type'] == '부채']['amount'].sum()
+        net_worth = total_asset - total_debt
+
+        c1, c2, c3 = st.columns(3)
+        c1.metric("총 자산", f"{total_asset:,.0f}원")
+        c2.metric("총 부채", f"{total_debt:,.0f}원", delta_color="inverse")
+        c3.metric("순자산", f"{net_worth:,.0f}원", delta=f"{(total_asset/total_debt if total_debt > 0 else 0):.1f}x")
+
+        st.divider()
+
+        # 2. 소유자별/항목별 탭 구분
+        asset_tab1, asset_tab2 = st.tabs(["👤 소유자별", "📂 항목별"])
+        
+        with asset_tab1:
+            # 소유자별(형준/윤희) 합계
+            owner_summary = df_assets.groupby(['owner', 'balance_type'])['amount'].sum().unstack(fill_value=0)
+            st.table(owner_summary.style.format("{:,.0f}"))
+            
+        with asset_tab2:
+            # 상세 리스트
+            st.dataframe(df_assets, use_container_width=True, hide_index=True)
+                         
 elif current_menu == "3. 수입/지출현황 조회":
     st.header("📊 수입/지출현황 조회")
     st.caption("표준화된 카테고리로 정리된 상세 내역입니다.")
