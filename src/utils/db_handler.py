@@ -74,8 +74,12 @@ def save_transactions(df, owner=None, filename="unknown.xlsx"):
     rename_df['owner'] = owner
     rename_df['source_file'] = filename
     rename_df['date'] = pd.to_datetime(rename_df['date']).dt.strftime('%Y-%m-%d')
-    rename_df['time'] = pd.to_datetime(rename_df['time'], errors='coerce').dt.strftime('%H:%M')
-    rename_df['time'] = rename_df['time'].fillna('00:00')
+    
+    # 시간은 그대로 유지 (이미 HH:mm:ss 형식)
+    if 'time' in rename_df.columns:
+        rename_df['time'] = rename_df['time'].astype(str).str.strip()
+    else:
+        rename_df['time'] = '00:00:00'
 
     # 4. DB에 저장할 최종 컬럼 리스트 정의
     valid_columns = list(mapping.values()) + ['owner']

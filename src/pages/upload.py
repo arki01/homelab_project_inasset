@@ -12,14 +12,52 @@ def render():
 
     with st.container(border=True):
         uploaded_file = st.file_uploader("뱅크샐러드 ZIP 파일을 업로드하세요", type=None)
-        password = st.text_input("ZIP 파일 비밀번호", type="password")
+        extracted_owner = None
+        default_password = None
+          
+        # 파일명에서 소유자 추출, 소유자별 기본 비밀번호 설정
+        if uploaded_file:
+            filename = uploaded_file.name  # 예: '조윤희님_2025-01-31~2026-01-31.zip'
+
+            if '님_' in filename:
+                full_name = filename.split('님_')[0]  # '조윤희님_...' -> '조윤희'
+                # 성을 제외한 이름만 추출 (마지막 1글자 = 이름)
+                extracted_owner = full_name[1:3] if len(full_name) > 0 else None
+
+            default_password = ""
+            if extracted_owner == "형준": 
+                default_password = "0979"
+            elif extracted_owner == "윤희": 
+                default_password = "1223"
+        
+        password = st.text_input("ZIP 파일 비밀번호", type="password", value=default_password)
 
     if uploaded_file and password:
+        # 파일명에서 소유자 추출
+        filename = uploaded_file.name  # 예: '조윤희님_2025-01-31~2026-01-31.zip'
+        extracted_owner = None
+        
+        if '님_' in filename:
+            full_name = filename.split('님_')[0]  # '조윤희님_...' -> '조윤희'
+            # 성을 제외한 이름만 추출 (마지막 1글자 = 이름)
+            extracted_owner = full_name[1:3] if len(full_name) > 0 else None
+        
         with st.container(border=True):
+            # 추출된 소유자가 있으면 선택값으로 설정, 없으면 기본값
+            owner_options = ["형준", "윤희"]
+            default_index = 0
+            
+            if extracted_owner and extracted_owner in owner_options:
+                default_index = owner_options.index(extracted_owner)
+            elif extracted_owner:
+                # 파일명의 이름이 선택지에 없으면 경고
+                st.warning(f"⚠️ 파일명의 '{extracted_owner}'님이 선택지에 없습니다. 수동으로 선택해주세요.")
+            
             owner = st.selectbox(
                 "데이터 소유자 선택", 
-                ["형준", "윤희"], 
-                help="해당 가계부 내역의 주인을 선택하세요. 저장 시 이 값이 일괄 적용됩니다."
+                owner_options,
+                index=default_index,
+                help="파일명에서 자동으로 감지되었습니다. 필요시 수정하세요."
             )
 
             upload_mode = st.radio(
@@ -59,7 +97,7 @@ def render():
 
         # 분석 완료 후 미리보기 표시 (버튼 리런과 상관없이 유지)
         if st.session_state.get('show_preview', False):
-            st.success(f"✅ {st.session_state.get('analysis_owner')}님의 가계부 정보를 성공적으로 불러왔습니다.\n- 수입/지출 내역: {len(st.session_state['temp_df'])}건\n- 자산 정보: {len(st.session_state.get('temp_asset_df', pd.DataFrame()))}건")
+            st.success(f"✅ {st.session_state.get('analysis_owner')}님의 가계부 정보를 성공적으로 불러왔습니다.\n- 자산 정보: {len(st.session_state.get('temp_asset_df', pd.DataFrame()))}건\n- 수입/지출 내역: {len(st.session_state['temp_df'])}건")
             
             if st.session_state.get('temp_asset_df') is not None and not st.session_state['temp_asset_df'].empty:
                 with st.expander("📊 자산 내역 미리보기", expanded=True):
@@ -86,8 +124,6 @@ def render():
             if st.button(f"{owner}님 명의로 저장", type="secondary", use_container_width=True):
                 try:
                     filename = st.session_state.get('uploaded_filename', 'unknown.zip')
-                    
-                    # 세션에서 owner 값 다시 확인
                     owner = st.session_state.get('analysis_owner', '사용자')
                     
                     tx_count = save_transactions(
@@ -113,11 +149,18 @@ def render():
                         st.balloons()
                         st.success(f"✅ {owner}님의 가계부 내역 {tx_count}건과 자산 정보 {asset_count}건이 저장되었습니다.\n(기간: {min_d} ~ {max_d})")
                         
+                        # 풍선 애니메이션 완료 대기
+                        time.sleep(5)
+                        
+                        # 세션 상태 초기화
                         st.session_state['show_preview'] = False
                         if 'temp_df' in st.session_state: 
                             del st.session_state['temp_df']
                         if 'temp_asset_df' in st.session_state: 
                             del st.session_state['temp_asset_df']
+                        if 'analysis_owner' in st.session_state:
+                            del st.session_state['analysis_owner']
+                        
                         st.rerun()
                     else:
                         st.warning("⚠️ 저장된 데이터가 0건입니다.")
@@ -137,13 +180,13 @@ def render():
                 if os.path.exists(DB_PATH):
                     try:
                         os.remove(DB_PATH)
-                        st.success("삭제 완료! 잠시 후 새로고침 됩니다.", use_container_width=True)
+                        st.success("삭제 완료! 잠시 후 새로고침 됩니다.")
                         time.sleep(1.5)
                         st.rerun()
                     except Exception as e:
                         st.error(f"오류: {e}")
                 else:
-                    st.warning("삭제할 데이터베이스가 없습니다.", use_container_width=True)
+                    st.warning("삭제할 데이터베이스가 없습니다.")
                     time.sleep(1)
                     st.rerun()
 
