@@ -20,18 +20,18 @@ load_dotenv()
 
 # 2. 세션 상태 초기화
 if 'menu' not in st.session_state:
-    st.session_state.menu = "1. 가계부 업로드"
+    st.session_state.menu = "수입/지출현황 조회"
 
 # 3. 사이드바 커스텀 메뉴
 st.sidebar.title("🏛️ InAsset")
 st.sidebar.markdown("---")
 
 menu_items = [
-    "1. 가계부 업로드",
-    "2. 자산 조회",
-    "3. 수입/지출현황 조회",
-    "4. 분석 리포트",
-    "5. 컨설턴트 챗봇"
+    "수입/지출현황 조회",
+    "자산 조회",
+    "분석 리포트",
+    "컨설턴트 챗봇",
+    "가계부 업로드"
 ]
 
 for item in menu_items:
@@ -49,13 +49,13 @@ st.sidebar.caption("N100 HomeLab Server Running")
 # 4. 현재 선택된 메뉴에 따른 화면 렌더링
 current_menu = st.session_state.menu
 
-if current_menu == "1. 가계부 업로드":
-    upload.render()
-elif current_menu == "2. 자산 조회":
-    assets.render()
-elif current_menu == "3. 수입/지출현황 조회":
+if current_menu == "수입/지출현황 조회":
     transactions.render()
-elif current_menu == "4. 분석 리포트":
+elif current_menu == "자산 조회":
+    assets.render()
+elif current_menu == "분석 리포트":
     analysis.render()
-elif current_menu == "5. 컨설턴트 챗봇":
+elif current_menu == "컨설턴트 챗봇":
     chatbot.render()
+elif current_menu == "가계부 업로드":
+    upload.render()

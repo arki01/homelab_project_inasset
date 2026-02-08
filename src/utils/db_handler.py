@@ -211,7 +211,7 @@ def save_asset_snapshot(df, owner=None, snapshot_date=None):
 
 def get_latest_assets():
     """
-    가장 최근 날짜의 자산 스냅샷 정보를 가져옵니다.
+    각 소유자별 가장 최근 날짜의 자산 스냅샷 정보를 가져옵니다.
     """
     if not os.path.exists(DB_PATH):
         return pd.DataFrame()
@@ -225,16 +225,24 @@ def get_latest_assets():
         conn.close()
         return pd.DataFrame() # 테이블이 없으면 빈 DF 반환
 
-    # 2. 가장 최근 스냅샷 날짜 찾기
-    cursor.execute("SELECT MAX(snapshot_date) FROM asset_snapshots")
-    result = cursor.fetchone()
-    last_date = result[0] if result else None
+    # 2. 소유자별 가장 최근 스냅샷 날짜 찾기
+    query_latest = """
+    SELECT owner, MAX(snapshot_date) as latest_date
+    FROM asset_snapshots
+    GROUP BY owner
+    """
+    latest_dates = pd.read_sql_query(query_latest, conn)
     
-    if not last_date:
+    if latest_dates.empty:
         conn.close()
         return pd.DataFrame()
 
-    # 3. 해당 날짜의 모든 자산/부채 내역 가져오기
+    # 3. 각 소유자의 최신 날짜 데이터 모두 조회
+    placeholders = ','.join(['?' for _ in latest_dates])
+    owners = latest_dates['owner'].tolist()
+    dates = latest_dates['latest_date'].tolist()
+    
+    # owner와 date 쌍으로 조회
     query = """
     SELECT 
         owner, 
@@ -244,10 +252,17 @@ def get_latest_assets():
         amount,
         snapshot_date
     FROM asset_snapshots 
-    WHERE snapshot_date = ?
-    ORDER BY balance_type DESC, amount DESC
+    WHERE (owner, snapshot_date) IN (
+        SELECT owner, snapshot_date FROM (
+            SELECT owner, snapshot_date,
+                   ROW_NUMBER() OVER (PARTITION BY owner ORDER BY snapshot_date DESC) as rn
+            FROM asset_snapshots
+        )
+        WHERE rn = 1
+    )
+    ORDER BY owner DESC, balance_type DESC, amount DESC
     """
-    df = pd.read_sql_query(query, conn, params=(last_date,))
+    df = pd.read_sql_query(query, conn)
     conn.close()
     return df
 
