@@ -49,6 +49,16 @@ def _init_db():
             )
         """)
 
+def get_connection():
+    """데이터베이스 연결 객체를 반환합니다."""
+    # DB 파일이 존재하는지 체크 (선택 사항)
+    if not os.path.exists(DB_PATH):
+        # 만약 data 폴더가 없다면 생성
+        os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+        
+    conn = sqlite3.connect(DB_PATH)
+    return conn
+
 def save_transactions(df, owner=None, filename="unknown.xlsx"):
     """
     지정된 기간과 소유자에 해당하는 기존 데이터를 삭제한 후, 새로운 데이터를 저장합니다.
@@ -165,14 +175,17 @@ def get_analyzed_transactions():
         SELECT 
             T.date,
             T.time,
+            T.tx_type,
             T.category_1,
             T.description,
             T.amount,
+            T.memo,
             T.owner,
+            T.source,
             IFNULL(R.expense_type, '미분류') as expense_type
         FROM transactions T
         LEFT JOIN category_rules R ON T.category_1 = R.category_name
-        WHERE T.tx_type = '지출'
+        WHERE T.tx_type != '이체'
         ORDER BY T.date DESC, T.time DESC
         '''
         
@@ -266,6 +279,29 @@ def get_latest_assets():
     conn.close()
     return df
 
+# utils/db_handler.py 에 추가
+
+def get_previous_assets(current_date):
+    """
+    주어진 날짜(current_date)보다 이전에 존재하는 가장 최근의 자산 스냅샷을 가져옵니다.
+    """
+    conn = get_connection()
+    try:
+        # 1. 현재 날짜보다 작은 날짜 중 가장 큰 날짜(최근 과거) 찾기
+        query_date = "SELECT MAX(snapshot_date) FROM asset_snapshots WHERE snapshot_date < ?"
+        cursor = conn.cursor()
+        cursor.execute(query_date, (str(current_date),))
+        prev_date = cursor.fetchone()[0]
+
+        if prev_date is None:
+            return pd.DataFrame() # 비교할 과거 데이터가 없음
+
+        # 2. 해당 날짜의 데이터 가져오기
+        query_data = "SELECT * FROM asset_snapshots WHERE snapshot_date = ?"
+        df = pd.read_sql(query_data, conn, params=(prev_date,))
+        return df
+    finally:
+        conn.close()
 
 # ## 변경전 정의 함수
 # def load_from_db():

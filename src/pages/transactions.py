@@ -17,16 +17,21 @@ def render():
         df_analyzed_dt = df_analyzed.copy()
         df_analyzed_dt['date'] = pd.to_datetime(df_analyzed_dt['date'])
         
+        # owner 변경 적용
+        mask_yunhee = df_analyzed_dt['source'].str.contains('Mega|페이코', case=False, na=False)                          
+        if mask_yunhee.any():
+            df_analyzed_dt.loc[mask_yunhee, 'owner'] = '윤희'
+
         latest_date = df_analyzed_dt['date'].max() # 데이터상 가장 최근 날짜
+        current_day = latest_date.day # 현재 진행된 일수 (예: 15일)
         
         # 이번 달 기준 (1일 ~ 최근 날짜)
         this_month_start = latest_date.replace(day=1)
         
-        # 지난 달 동기간 기준 (지난달 1일 ~ 지난달 최근 날짜와 같은 날)
-        last_month_start = this_month_start - relativedelta(months=1)
-        last_month_end = latest_date - relativedelta(months=1)
+        # [변경] 비교 기준: 최근 1년 (이번 달 제외)
+        one_year_ago = this_month_start - relativedelta(years=1)
          
-        st.caption(f"📅 Updated: {latest_date.strftime('%Y-%m-%d')} (전월 동기간 {last_month_end.strftime('%m-%d')} 대비)")
+        st.caption(f"📅 Updated: {latest_date.strftime('%Y-%m-%d')} (최근 1년 동기간 평균 대비)")
         st.subheader("총 내역")
 
         # 탭 설정
@@ -38,74 +43,78 @@ def render():
                 # Owner 필터링
                 if owner == '전체':
                     display_owner_df = df_analyzed_dt.copy()
-                    label_prefix = "전체"
                 else:
                     display_owner_df = df_analyzed_dt[df_analyzed_dt['owner'] == owner]
-                    label_prefix = f"{owner}님"
                 
-                # --- 데이터 집계 로직 시작 ---
-                
-                # A. 이번 달 데이터 필터링
+                # --- [A] 이번 달 데이터 집계 ---
                 current_df = display_owner_df[
                     (display_owner_df['date'] >= this_month_start) & 
                     (display_owner_df['date'] <= latest_date)
                 ]
                 
-                # B. 지난 달 데이터 필터링 (동기간)
-                past_df = display_owner_df[
-                    (display_owner_df['date'] >= last_month_start) & 
-                    (display_owner_df['date'] <= last_month_end)
-                ]
-
-                # C. 금액 집계 함수 (중복 제거를 위해 함수형태 혹은 간단히 변수 처리)
-                # 이번 달
                 cur_income = current_df[current_df['amount'] > 0]['amount'].sum()
-                cur_expense = current_df[current_df['amount'] < 0]['amount'].sum() # 음수 값
+                cur_expense = current_df[current_df['amount'] < 0]['amount'].sum()
                 cur_fixed = current_df[current_df['expense_type'] == '고정 지출']['amount'].sum()
                 cur_variable = current_df[current_df['expense_type'] == '변동 지출']['amount'].sum()
 
-                # 지난 달
-                prev_income = past_df[past_df['amount'] > 0]['amount'].sum()
-                prev_expense = past_df[past_df['amount'] < 0]['amount'].sum()
-                prev_fixed = past_df[past_df['expense_type'] == '고정 지출']['amount'].sum()
-                prev_variable = past_df[past_df['expense_type'] == '변동 지출']['amount'].sum()
+                # --- [B] 최근 1년 동기간 평균 계산 (핵심 로직 변경) ---
+                # 1. 기간 필터: 1년 전 ~ 이번 달 시작 전까지
+                past_year_df = display_owner_df[
+                    (display_owner_df['date'] >= one_year_ago) & 
+                    (display_owner_df['date'] < this_month_start)
+                ]
 
-                # D. 증감률 계산 헬퍼 함수
-                def calc_delta(current, previous):
-                    if previous == 0:
-                        return None # 지난달 데이터가 0이면 비교 불가
-                    diff = current - previous
-                    pct = (diff / abs(previous)) * 100
+                # 2. 일자 필터: 매월 1일 ~ 현재 일수(current_day) 까지만 포함
+                # 예: 오늘이 10일이면, 작년 5월달 데이터 중에서도 1일~10일 데이터만 살림
+                past_year_filtered = past_year_df[past_year_df['date'].dt.day <= current_day]
+
+                # 3. 평균 계산을 위한 분모(개월 수) 계산
+                # 12로 고정하지 않고, 실제 데이터가 있는 월의 개수를 셉니다 (데이터가 3개월치 밖에 없을 수도 있으므로)
+                unique_months = past_year_filtered['date'].dt.to_period('M').nunique()
+                if unique_months == 0:
+                    unique_months = 1 # 0으로 나누기 방지
+
+                # 4. 항목별 평균 산출 (총합 / 개월 수)
+                avg_income = past_year_filtered[past_year_filtered['amount'] > 0]['amount'].sum() / unique_months
+                avg_expense = past_year_filtered[past_year_filtered['amount'] < 0]['amount'].sum() / unique_months
+                avg_fixed = past_year_filtered[past_year_filtered['expense_type'] == '고정 지출']['amount'].sum() / unique_months
+                avg_variable = past_year_filtered[past_year_filtered['expense_type'] == '변동 지출']['amount'].sum() / unique_months
+
+                # --- [C] 델타 계산 함수 (기존 유지) ---
+                def calc_delta(current, average):
+                    if average == 0:
+                        return None
+                    diff = current - average
+                    pct = (diff / abs(average)) * 100
                     return f"{diff:,.0f}원 ({pct:+.1f}%)"
 
-                # --- UI 렌더링 ---
-                
+                # --- [D] UI 렌더링 ---
                 c1, c2 = st.columns(2)
                 with c1:
                     st.metric(
                         label="이번 달 총 수입", 
                         value=f"{cur_income:,.0f}원", 
-                        delta=calc_delta(cur_income, prev_income)
+                        delta=calc_delta(cur_income, avg_income),
+                        help=f"최근 1년 동기간 평균: {avg_income:,.0f}원"
                     )
-                    # 지출은 음수이므로, 절댓값으로 보여주거나 로직에 유의해야 함 (여기서는 원본 값 유지하되 delta 색상 반전)
                     st.metric(
                         label="이번 달 총 지출", 
                         value=f"{cur_expense:,.0f}원", 
-                        delta=calc_delta(cur_expense, prev_expense),
-                        delta_color="inverse" # 지출이 늘어나면 빨간색(Bad)이 아니라 초록색? 통상 지출 증가는 Bad(Red)
+                        delta=calc_delta(cur_expense, avg_expense),
+                        help=f"최근 1년 동기간 평균: {avg_expense:,.0f}원"
                     )
                 with c2:
                     st.metric(
                         label="이번 달 고정 지출", 
                         value=f"{cur_fixed:,.0f}원",
-                        delta=calc_delta(cur_fixed, prev_fixed),
-                        delta_color="inverse"
+                        delta=calc_delta(cur_fixed, avg_fixed),
+                        help=f"최근 1년 동기간 평균: {avg_fixed:,.0f}원"
                     )
                     st.metric(
                         label="이번 달 변동 지출", 
                         value=f"{cur_variable:,.0f}원",
-                        delta=calc_delta(cur_variable, prev_variable),
-                        delta_color="inverse"
+                        delta=calc_delta(cur_variable, avg_variable),
+                        help=f"최근 1년 동기간 평균: {avg_variable:,.0f}원"
                     )
 
                 # --- [C] 하단 상세 내역 필터링 및 합계 (새로 추가된 기능) ---
@@ -123,9 +132,19 @@ def render():
                 )
 
                 # 1. 필터 UI 구성 (3단 컬럼)
-                f_col1, f_col2, f_col3 = st.columns([1, 1, 2])
+                f_col1, f_col2, f_col3, f_col4 = st.columns([1, 1, 1, 2])
                 
                 with f_col1:
+                    # 카테고리 선택 (다중 선택 가능)
+                    unique_cats = sorted(display_owner_df['tx_type'].dropna().unique())
+                    selected_cats = st.multiselect(
+                        "수입/지출", 
+                        unique_cats,
+                        placeholder="전체 선택",
+                        key=f"tx_select_{owner}" 
+                    )
+
+                with f_col2:
                     # 카테고리 선택 (다중 선택 가능)
                     unique_cats = sorted(display_owner_df['category_1'].dropna().unique())
                     selected_cats = st.multiselect(
@@ -135,17 +154,17 @@ def render():
                         key=f"cat_select_{owner}" 
                     )
                 
-                with f_col2:
+                with f_col3:
                     # 지출 유형 선택 (고정/변동)
                     unique_types = sorted(display_owner_df['expense_type'].dropna().unique())
                     selected_types = st.multiselect(
                         "지출 유형",
                         unique_types,
                         placeholder="전체 선택",
-                        key=f"type_select_{owner}" 
+                        key=f"expense_select_{owner}" 
                     )
 
-                with f_col3:
+                with f_col4:
                     # 적요 검색 (텍스트 입력)
                     search_text = st.text_input(
                         "내용",
@@ -184,22 +203,29 @@ def render():
                     filtered_df = filtered_df[filtered_df['description'].str.contains(search_text, case=False, na=False)]
 
                 # 3. 데이터프레임 표시
+
                 # 날짜 포맷팅 후 표시
                 show_df = filtered_df.copy()
                 show_df['date'] = show_df['date'].dt.strftime('%Y-%m-%d')
-                
+
                 st.dataframe(
-                    show_df.sort_values(by='date', ascending=False),
+                    show_df.sort_values(by=['date', 'time'], ascending=False),
                     use_container_width=True,
                     hide_index=True,
                     column_config={
-                        "amount": st.column_config.NumberColumn("금액", format="%d원"),
                         "date": "일자",
                         "time": "시간",
+                        "tx_type": "수입/지출",
                         "owner": "소유자",
                         "category_1": "대분류",
                         "description": "내용",
-                        "expense_type": "유형"
+                        "expense_type": "유형",
+                        "memo": "메모",
+                        "source": "결제수단",
+                        "amount": st.column_config.NumberColumn(
+                            "금액", 
+                            format="%d원" 
+                        ),
                     }
                 )
 
