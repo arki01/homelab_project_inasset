@@ -281,25 +281,37 @@ def get_latest_assets():
 
 # utils/db_handler.py 에 추가
 
-def get_previous_assets(current_date):
+def get_previous_assets(target_date, owner):
     """
-    주어진 날짜(current_date)보다 이전에 존재하는 가장 최근의 자산 스냅샷을 가져옵니다.
+    특정 소유자의 데이터 중 target_date와 가장 가까운 snapshot_date의 데이터를 가져옵니다.
     """
-    conn = get_connection()
+    conn = sqlite3.connect(DB_PATH)
     try:
-        # 1. 현재 날짜보다 작은 날짜 중 가장 큰 날짜(최근 과거) 찾기
-        query_date = "SELECT MAX(snapshot_date) FROM asset_snapshots WHERE snapshot_date < ?"
-        cursor = conn.cursor()
-        cursor.execute(query_date, (str(current_date),))
-        prev_date = cursor.fetchone()[0]
-
-        if prev_date is None:
-            return pd.DataFrame() # 비교할 과거 데이터가 없음
-
-        # 2. 해당 날짜의 데이터 가져오기
-        query_data = "SELECT * FROM asset_snapshots WHERE snapshot_date = ?"
-        df = pd.read_sql(query_data, conn, params=(prev_date,))
+        # 1. 해당 소유자의 snapshot_date들 중 target_date와 차이(절대값)가 가장 작은 날짜 1개를 찾습니다.
+        # strftime('%s', ...)는 날짜를 초 단위 타임스탬프로 변환하여 계산 가능하게 합니다.
+        find_date_query = f"""
+            SELECT snapshot_date 
+            FROM asset_snapshots 
+            WHERE owner = '{owner}'
+            ORDER BY ABS(strftime('%s', snapshot_date) - strftime('%s', '{target_date}')) ASC
+            LIMIT 1
+        """
+        closest_date_df = pd.read_sql(find_date_query, conn)
+        
+        if closest_date_df.empty:
+            return pd.DataFrame()
+            
+        closest_date = closest_date_df.iloc[0]['snapshot_date']
+        
+        # 2. 찾은 '가장 근사한 날짜'에 해당하는 그 소유자의 모든 자산 내역을 가져옵니다.
+        query = f"""
+            SELECT * FROM asset_snapshots  
+            WHERE owner = '{owner}' 
+              AND snapshot_date = '{closest_date}'
+        """
+        df = pd.read_sql(query, conn)
         return df
+        
     finally:
         conn.close()
 

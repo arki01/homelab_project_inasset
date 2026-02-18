@@ -11,21 +11,24 @@ _init_db()
 init_category_rules()
 load_dotenv()
 
-# 3. 미려한 디자인을 위한 CSS 주입 (Magic CSS)
+# 3. 미려한 디자인을 위한 CSS 주입 (다크/라이트 모드 유연 대응)
 st.markdown("""
     <style>
-    /* 전체 사이드바 배경색 살짝 조정 */
+    /* [핵심] 전체 사이드바 배경색: Streamlit 테마 변수 활용 */
     [data-testid="stSidebar"] {
-        background-color: #f8f9fa;
+        background-color: var(--secondary-background-color);
     }
     
     /* 메뉴 버튼 디자인 */
     .stButton > button {
         width: 100%;
         border-radius: 10px;
-        border: 1px solid #e0e0e0;
-        background-color: white;
-        color: #333;
+        /* 테두리도 명시적 색상 대신 반투명 회색으로 처리 */
+        border: 1px solid rgba(128, 128, 128, 0.2); 
+        /* 배경을 투명하게 해서 라이트/다크 테마 배경을 그대로 투과시킴 */
+        background-color: transparent; 
+        /* 글자색을 Streamlit 테마 글자색 변수로 지정 */
+        color: var(--text-color); 
         padding: 0.5rem 1rem;
         transition: all 0.3s ease;
         text-align: left;
@@ -37,7 +40,7 @@ st.markdown("""
     /* 활성화된 메뉴 스타일 (Primary 버튼 스타일링) */
     .stButton > button[kind="primary"] {
         background: linear-gradient(135deg, #6a11cb 0%, #2575fc 100%);
-        color: white;
+        color: white; /* 짙은 그라데이션 위에는 항상 흰색 글씨가 어울림 */
         border: none;
         box-shadow: 0 4px 15px rgba(0,0,0,0.1);
     }
@@ -47,15 +50,19 @@ st.markdown("""
         border-color: #2575fc;
         color: #2575fc;
         transform: translateY(-2px);
+        background-color: rgba(37, 117, 252, 0.05); /* 호버 시 약간의 파란 배경 효과 */
     }
     
     /* 사이드바 하단 정보창 스타일 */
     .server-status {
         padding: 10px;
         border-radius: 8px;
-        background-color: #e3f2fd;
+        /* #e3f2fd 처럼 꽉 막힌 색 대신, 파란색(2196f3)에 투명도 10%를 줘서 테마에 스며들게 함 */
+        background-color: rgba(33, 150, 243, 0.1); 
         border-left: 5px solid #2196f3;
         font-size: 0.8rem;
+        /* 글자색 역시 테마에 맞게 변경 */
+        color: var(--text-color); 
     }
     </style>
     """, unsafe_allow_html=True)
@@ -67,7 +74,8 @@ if 'menu' not in st.session_state:
 # 5. 사이드바 구성
 with st.sidebar:
     st.markdown("<h1 style='text-align: center; color: #2575fc;'>🏛️ InAsset</h1>", unsafe_allow_html=True)
-    st.markdown("<p style='text-align: center; font-size: 0.8rem; color: gray;'>우리 부부의 스마트 자산 관리자</p>", unsafe_allow_html=True)
+    # [수정] color: gray 대신 opacity(투명도)를 사용하여 다크모드에서도 자연스럽게 보이도록 조치
+    st.markdown("<p style='text-align: center; font-size: 0.8rem; opacity: 0.7;'>우리 부부의 스마트 자산 관리자</p>", unsafe_allow_html=True)
     st.markdown("---")
 
     # 메뉴 구성 (이모지 포함)
@@ -98,7 +106,7 @@ with st.sidebar:
         <div class="server-status">
             <strong>🏠 Homelab Server Status</strong><br>
             • Node: N100 Mini PC<br>
-            • Status: <span style="color: green;">● Running</span>
+            • Status: <span style="color: #4caf50;">● Running</span>
         </div>
     """, unsafe_allow_html=True)
 

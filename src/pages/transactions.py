@@ -31,7 +31,7 @@ def render():
         # [변경] 비교 기준: 최근 1년 (이번 달 제외)
         one_year_ago = this_month_start - relativedelta(years=1)
          
-        st.caption(f"📅 Updated: {latest_date.strftime('%Y-%m-%d')} (최근 1년 동기간 평균 대비)")
+        st.caption(f"📅 Updated: {latest_date.strftime('%Y-%m-%d')}")
         st.subheader("총 내역")
 
         # 탭 설정
@@ -136,10 +136,10 @@ def render():
                 
                 with f_col1:
                     # 카테고리 선택 (다중 선택 가능)
-                    unique_cats = sorted(display_owner_df['tx_type'].dropna().unique())
-                    selected_cats = st.multiselect(
+                    unique_tx = sorted(display_owner_df['tx_type'].dropna().unique())
+                    selected_tx = st.multiselect(
                         "수입/지출", 
-                        unique_cats,
+                        unique_tx,
                         placeholder="전체 선택",
                         key=f"tx_select_{owner}" 
                     )
@@ -192,6 +192,9 @@ def render():
                     filtered_df = filtered_df[filtered_df['date'] >= start_of_month]
 
                 # [Step 2] 카테고리/유형/검색어 필터 적용
+                if selected_tx:
+                    filtered_df = filtered_df[filtered_df['tx_type'].isin(selected_tx)]
+
                 if selected_cats:
                     filtered_df = filtered_df[filtered_df['category_1'].isin(selected_cats)]
                 
