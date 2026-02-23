@@ -11,23 +11,21 @@ _init_db()
 init_category_rules()
 load_dotenv()
 
-# 3. 미려한 디자인을 위한 CSS 주입 (다크/라이트 모드 유연 대응)
+# 3. 미려한 디자인을 위한 CSS 주입 (다크/라이트 모드 완벽 대응 및 겹침 방지)
 st.markdown("""
     <style>
-    /* [핵심] 전체 사이드바 배경색: Streamlit 테마 변수 활용 */
-    [data-testid="stSidebar"] {
-        background-color: var(--secondary-background-color);
-    }
+    /* 1. 사이드바 배경: Streamlit 기본 테마 엔진에 온전히 맡기기 위해 강제 속성을 제거합니다. */
     
-    /* 메뉴 버튼 디자인 */
+    /* 2. 메뉴 버튼 디자인 */
     .stButton > button {
         width: 100%;
         border-radius: 10px;
-        /* 테두리도 명시적 색상 대신 반투명 회색으로 처리 */
-        border: 1px solid rgba(128, 128, 128, 0.2); 
-        /* 배경을 투명하게 해서 라이트/다크 테마 배경을 그대로 투과시킴 */
-        background-color: transparent; 
-        /* 글자색을 Streamlit 테마 글자색 변수로 지정 */
+        /* 테두리: 테마의 보조 배경색을 따라가도록 설정 */
+        border: 1px solid var(--secondary-background-color); 
+        
+        /* [핵심 수정] 투명(transparent) 대신 테마의 '기본 배경색'을 꽉 채워서 뒤가 비치지 않게 방어 */
+        background-color: var(--background-color); 
+        
         color: var(--text-color); 
         padding: 0.5rem 1rem;
         transition: all 0.3s ease;
@@ -40,7 +38,7 @@ st.markdown("""
     /* 활성화된 메뉴 스타일 (Primary 버튼 스타일링) */
     .stButton > button[kind="primary"] {
         background: linear-gradient(135deg, #6a11cb 0%, #2575fc 100%);
-        color: white; /* 짙은 그라데이션 위에는 항상 흰색 글씨가 어울림 */
+        color: white; 
         border: none;
         box-shadow: 0 4px 15px rgba(0,0,0,0.1);
     }
@@ -50,18 +48,16 @@ st.markdown("""
         border-color: #2575fc;
         color: #2575fc;
         transform: translateY(-2px);
-        background-color: rgba(37, 117, 252, 0.05); /* 호버 시 약간의 파란 배경 효과 */
     }
     
-    /* 사이드바 하단 정보창 스타일 */
+    /* 3. 사이드바 하단 정보창 스타일 */
     .server-status {
         padding: 10px;
         border-radius: 8px;
-        /* #e3f2fd 처럼 꽉 막힌 색 대신, 파란색(2196f3)에 투명도 10%를 줘서 테마에 스며들게 함 */
-        background-color: rgba(33, 150, 243, 0.1); 
+        /* 색상 충돌 없이 다크/라이트 어디든 어울리는 무채색 반투명으로 수정 */
+        background-color: rgba(128, 128, 128, 0.1); 
         border-left: 5px solid #2196f3;
         font-size: 0.8rem;
-        /* 글자색 역시 테마에 맞게 변경 */
         color: var(--text-color); 
     }
     </style>
