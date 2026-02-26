@@ -315,6 +315,130 @@ def get_previous_assets(target_date, owner):
     finally:
         conn.close()
 
+def get_chatbot_context(limit_recent=20, period_months=3):
+    """
+    챗봇에게 전달할 금융 데이터 컨텍스트를 생성합니다.
+    
+    Args:
+        limit_recent: 최근 거래 내역 개수 (기본 20건)
+        period_months: 통계 집계 기간 (기본 3개월)
+    
+    Returns:
+        str: 포맷팅된 컨텍스트 문자열
+    """
+    if not os.path.exists(DB_PATH):
+        return "아직 데이터가 없습니다. 먼저 데이터를 업로드해주세요."
+    
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            # 1. 기간 계산 (최근 N개월)
+            from datetime import datetime, timedelta
+            end_date = datetime.now()
+            start_date = end_date - timedelta(days=period_months * 30)
+            start_date_str = start_date.strftime('%Y-%m-%d')
+            
+            # 2. 기간별 수입/지출 요약
+            summary_query = f"""
+            SELECT
+                tx_type,
+                owner,
+                SUM(amount) as total
+            FROM transactions
+            WHERE date >= '{start_date_str}'
+            GROUP BY tx_type, owner
+            ORDER BY tx_type DESC, owner
+            """
+            summary_df = pd.read_sql_query(summary_query, conn)
+            
+            # 3. 카테고리별 지출 통계 (지출만, 상위 5개)
+            category_query = f"""
+            SELECT
+                category_1,
+                SUM(amount) as total,
+                COUNT(*) as count
+            FROM transactions
+            WHERE date >= '{start_date_str}' AND tx_type = '지출'
+            GROUP BY category_1
+            ORDER BY total DESC
+            LIMIT 5
+            """
+            category_df = pd.read_sql_query(category_query, conn)
+            
+            # 4. 고정비/변동비 분석
+            expense_type_query = f"""
+            SELECT
+                IFNULL(R.expense_type, '미분류') as expense_type,
+                SUM(T.amount) as total
+            FROM transactions T
+            LEFT JOIN category_rules R ON T.category_1 = R.category_name
+            WHERE T.date >= '{start_date_str}' AND T.tx_type = '지출'
+            GROUP BY expense_type
+            """
+            expense_type_df = pd.read_sql_query(expense_type_query, conn)
+            
+            # 5. 최근 거래 내역
+            recent_query = f"""
+            SELECT
+                date,
+                category_1,
+                description,
+                amount,
+                owner,
+                tx_type
+            FROM transactions
+            ORDER BY date DESC, time DESC
+            LIMIT {limit_recent}
+            """
+            recent_df = pd.read_sql_query(recent_query, conn)
+            
+            # 6. 컨텍스트 문자열 생성
+            context = f"=== 최근 {period_months}개월 재무 현황 ===\n\n"
+            
+            # 수입/지출 요약
+            if not summary_df.empty:
+                total_income = summary_df[summary_df['tx_type'] == '수입']['total'].sum()
+                total_expense = summary_df[summary_df['tx_type'] == '지출']['total'].sum()
+                net_change = total_income - total_expense
+                
+                context += f"• 총 수입: {total_income:,}원\n"
+                context += f"• 총 지출: {total_expense:,}원\n"
+                context += f"• 순자산 변화: {net_change:+,}원\n\n"
+                
+                # 소유자별 세부 내역
+                context += "소유자별 내역:\n"
+                for _, row in summary_df.iterrows():
+                    context += f"  - {row['owner']} {row['tx_type']}: {row['total']:,}원\n"
+                context += "\n"
+            
+            # 카테고리별 지출 TOP 5
+            if not category_df.empty:
+                context += "=== 카테고리별 지출 TOP 5 ===\n"
+                total_expense = category_df['total'].sum()
+                for idx, row in category_df.iterrows():
+                    percentage = (row['total'] / total_expense * 100) if total_expense > 0 else 0
+                    context += f"{idx+1}. {row['category_1']}: {row['total']:,}원 ({percentage:.1f}%, {row['count']}건)\n"
+                context += "\n"
+            
+            # 고정비/변동비 분석
+            if not expense_type_df.empty:
+                context += "=== 고정비 vs 변동비 ===\n"
+                total = expense_type_df['total'].sum()
+                for _, row in expense_type_df.iterrows():
+                    percentage = (row['total'] / total * 100) if total > 0 else 0
+                    context += f"• {row['expense_type']}: {row['total']:,}원 ({percentage:.1f}%)\n"
+                context += "\n"
+            
+            # 최근 거래 내역
+            if not recent_df.empty:
+                context += f"=== 최근 거래 내역 ({limit_recent}건) ===\n"
+                for _, row in recent_df.iterrows():
+                    context += f"[{row['date']}] {row['tx_type']} | {row['category_1']} | {row['description']} | {row['amount']:,}원 | {row['owner']}\n"
+            
+            return context
+            
+    except Exception as e:
+        return f"데이터 조회 중 오류가 발생했습니다: {str(e)}"
+
 # ## 변경전 정의 함수
 # def load_from_db():
 #     if not os.path.exists(DB_PATH):

@@ -17,3 +17,6 @@ models/
 
 # 데이터셋
 data/
+
+# 설명자료
+pages/

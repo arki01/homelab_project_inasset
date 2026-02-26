@@ -16,6 +16,11 @@ st.markdown("""
     <style>
     /* 1. 사이드바 배경: Streamlit 기본 테마 엔진에 온전히 맡기기 위해 강제 속성을 제거합니다. */
     
+    /* 사이드바 상단 메뉴명 숨기기 */
+    [data-testid="stSidebarNav"] {
+        display: none;
+    }
+    
     /* 2. 메뉴 버튼 디자인 */
     .stButton > button {
         width: 100%;

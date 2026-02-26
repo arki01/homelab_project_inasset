@@ -1,14 +1,16 @@
 version: '3.8'
 
 services:
-  inasset-app:  
+  inasset-app:
     image: python:3.11-slim
     container_name: inasset
     volumes:
       - .:/app
     working_dir: /app
     ports:
-      - "3101:8501" 
+      - "3101:8501"
+    env_file:
+      - .env
     environment:
       - TZ=Asia/Seoul
       - STREAMLIT_SERVER_PORT=8501
