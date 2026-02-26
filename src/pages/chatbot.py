@@ -1,7 +1,6 @@
 import streamlit as st
 import os
 from openai import OpenAI
-from utils.db_handler import get_chatbot_context
 from utils.ai_agent import ask_gpt_finance
 
 def render():
@@ -226,14 +225,9 @@ def render():
         with st.chat_message("assistant"):
             with st.spinner("🔍 AI가 데이터를 분석하고 있습니다..."):
                 try:
-                    # DB 컨텍스트 생성
-                    db_context = get_chatbot_context(limit_recent=20, period_months=3)
-                    
-                    # AI 응답 생성
+                    # AI가 필요한 쿼리를 직접 생성·실행 후 답변
                     response = ask_gpt_finance(
                         client=client,
-                        user_message=user_input,
-                        db_context=db_context,
                         chat_history=st.session_state.chat_history
                     )
                     

@@ -315,6 +315,46 @@ def get_previous_assets(target_date, owner):
     finally:
         conn.close()
 
+def execute_query_safe(sql: str, max_rows: int = 200) -> str:
+    """
+    챗봇이 생성한 SELECT 쿼리를 안전하게 실행합니다.
+    SELECT/WITH 쿼리만 허용하고, 결과를 문자열로 반환합니다.
+    """
+    sql_stripped = sql.strip()
+    sql_upper = sql_stripped.upper()
+
+    if not (sql_upper.startswith('SELECT') or sql_upper.startswith('WITH')):
+        return "오류: SELECT 쿼리만 허용됩니다."
+
+    forbidden_keywords = ['DROP', 'DELETE', 'UPDATE', 'INSERT', 'ALTER', 'CREATE', 'ATTACH', 'PRAGMA']
+    for kw in forbidden_keywords:
+        if re.search(rf'\b{kw}\b', sql_upper):
+            return f"오류: '{kw}' 명령은 허용되지 않습니다."
+
+    if not os.path.exists(DB_PATH):
+        return "데이터베이스가 없습니다. 먼저 데이터를 업로드해주세요."
+
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            df = pd.read_sql_query(sql_stripped, conn)
+            if df.empty:
+                return "조회 결과가 없습니다."
+
+            suffix = ""
+            if len(df) > max_rows:
+                df = df.head(max_rows)
+                suffix = f"\n(전체 결과 중 상위 {max_rows}건만 표시)"
+
+            # 금액 컬럼 포맷팅
+            for col in df.columns:
+                if col in ('amount', 'total') and pd.api.types.is_numeric_dtype(df[col]):
+                    df[col] = df[col].apply(lambda x: f"{int(x):,}원" if pd.notna(x) else "")
+
+            return df.to_string(index=False) + suffix
+    except Exception as e:
+        return f"쿼리 실행 오류: {str(e)}"
+
+
 def get_chatbot_context(limit_recent=20, period_months=3):
     """
     챗봇에게 전달할 금융 데이터 컨텍스트를 생성합니다.
