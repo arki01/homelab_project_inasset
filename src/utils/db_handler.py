@@ -249,10 +249,6 @@ def get_latest_assets():
         return pd.DataFrame()
 
     # 3. 각 소유자의 최신 날짜 데이터 모두 조회
-    placeholders = ','.join(['?' for _ in latest_dates])
-    owners = latest_dates['owner'].tolist()
-    dates = latest_dates['latest_date'].tolist()
-    
     # owner와 date 쌍으로 조회
     query = """
     SELECT 
