@@ -27,14 +27,15 @@ BankSalad ZIP 업로드
 
 | 파일 | 역할 |
 |------|------|
-| `src/app.py` | 진입점, 사이드바 라우팅, DB 초기화 |
+| `src/app.py` | 진입점, 사이드바 라우팅, DB 초기화, 인증/승인 |
+| `src/pages/budget.py` | 🎯 목표 예산 설정 |
 | `src/pages/transactions.py` | 💰 수입/지출 현황 |
 | `src/pages/assets.py` | 🏦 자산 현황 |
 | `src/pages/chatbot.py` | 🤖 AI 챗봇 |
-| `src/pages/upload.py` | 📂 BankSalad ZIP 업로드 |
+| `src/pages/upload.py` | 📂 ZIP/Excel 업로드 + docs/ 자동처리 |
 | `src/pages/analysis.py` | 📊 분석 리포트 (stub) |
 | `src/utils/db_handler.py` | 모든 SQLite 작업 |
-| `src/utils/file_handler.py` | ZIP/Excel 파싱 |
+| `src/utils/file_handler.py` | ZIP/Excel 파싱, 파일명 메타데이터 추출 |
 | `src/utils/ai_agent.py` | OpenAI API 래퍼 |
 
 ## 데이터베이스 스키마
@@ -56,7 +57,7 @@ transactions (
   created_at TIMESTAMP
 )
 
--- 자산 스냅샷
+-- 자산 스냅샷 (동일 snapshot_date+owner 조합은 DELETE+INSERT)
 asset_snapshots (
   id, snapshot_date TEXT,
   balance_type TEXT,      -- 자산/부채
@@ -65,29 +66,48 @@ asset_snapshots (
   owner TEXT, created_at TIMESTAMP
 )
 
--- 카테고리별 고정/변동 분류
-category_rules (
-  category_name TEXT PRIMARY KEY,
-  expense_type TEXT       -- 고정 지출/변동 지출
+-- 카테고리별 예산 (category_rules 통합 대체)
+budgets (
+  category       TEXT PRIMARY KEY,  -- transactions.category_1과 동일
+  monthly_amount INTEGER,           -- 월 예산 (원 단위)
+  is_fixed_cost  INTEGER            -- 1=고정, 0=변동
+)
+
+-- docs/ 폴더 자동처리 이력
+processed_files (
+  filename      TEXT PRIMARY KEY,
+  owner         TEXT,
+  snapshot_date TEXT,
+  processed_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 )
 ```
 
 ## 주요 함수
 
 ### db_handler.py
-- `_init_db()` — 앱 시작 시 테이블 생성
-- `init_category_rules()` — 고정/변동 분류 룰 초기화
+- `_init_db()` — 앱 시작 시 테이블 생성 (migration: category_rules DROP 포함)
 - `save_transactions(df, owner, filename)` — 해당 기간 삭제 후 재삽입 (UPSERT)
-- `save_asset_snapshot(df, owner, snapshot_date)` — 자산 스냅샷 추가 (APPEND only)
-- `get_analyzed_transactions()` — transactions LEFT JOIN category_rules
+- `save_asset_snapshot(df, owner, snapshot_date)` — 동일 날짜+소유자 DELETE+INSERT
+- `init_budgets()` — transactions(owner='형준')에서 카테고리 추출해 budgets 초기화
+- `sync_categories_from_transactions()` — 업로드 후 신규 카테고리를 budgets에 자동 추가
+- `get_analyzed_transactions()` — transactions LEFT JOIN budgets (expense_type 포함)
 - `get_latest_assets()` — 소유자별 최신 스냅샷
 - `get_previous_assets(target_date, owner)` — target_date에 가장 근접한 스냅샷 조회 (delta 계산용)
-- `get_chatbot_context(limit_recent, period_months)` — GPT 컨텍스트용 요약 문자열 (현재 챗봇에서 미사용)
+- `has_transactions_in_range(owner, start_date, end_date)` — 기간 내 데이터 존재 여부
+- `get_processed_filenames()` — docs/ 처리 이력 파일명 set 반환
+- `mark_file_processed(filename, owner, snapshot_date)` — 처리 완료 기록
+- `clear_all_data()` — transactions, asset_snapshots, processed_files 전체 삭제
 - `execute_query_safe(sql, max_rows)` — 챗봇 Function Calling용 SELECT 쿼리 안전 실행기
 
 ### file_handler.py
-- `process_uploaded_zip(uploaded_file, password, start_date, end_date)` — ZIP 해제 + Excel 파싱, (tx_df, asset_df, error) 반환
-- `_preprocess_asset_df(df)` — BankSalad Sheet 0의 복잡한 병합셀 처리
+- `detect_owner_from_filename(filename)` — 파일명 패턴으로 소유자 추출 (ZIP: 님_ / Excel: _나·_내사랑)
+- `scan_docs_folder()` — docs/ 폴더 스캔, 메타데이터 목록 반환
+- `extract_date_range(filename)` — 파일명에서 (start_date, end_date) 추출
+- `extract_snapshot_date(filename)` — 파일명에서 end_date 추출
+- `process_uploaded_zip(uploaded_file, password, start_date, end_date)` — ZIP 해제 + Excel 파싱
+- `process_uploaded_excel(uploaded_file, start_date, end_date)` — Excel 직접 파싱
+- `_parse_excel_sheets(excel_data, start_date, end_date)` — Sheet0(자산)/Sheet1(거래) 공통 파서
+- `_parse_asset_sheet(df)` — BankSalad Sheet 0의 병합셀 처리 (구 _preprocess_asset_df)
 
 ### ai_agent.py
 - `ask_gpt_finance(client, chat_history)` — Function Calling 방식으로 GPT가 `query_database` 도구를 직접 호출해 쿼리를 작성·실행하고 답변 생성
@@ -125,29 +145,30 @@ restart: always
 
 ## 현재 상태
 
-- ✅ 완성: 업로드(ZIP), 거래내역, 자산현황, AI 챗봇 (Function Calling)
+- ✅ Step 0: 기술 부채 정리 (debug print 제거, f-string SQL 수정, 미사용 코드 정리, requirements 정비)
+- ✅ Step 1: 로그인 및 보안 강화 (streamlit-authenticator, admin/user 역할, 승인 대기 관리)
+- ✅ Step 2: 목표 예산 설정 (budgets 테이블, budget.py, 카테고리 자동 동기화)
+- ✅ Step 3: 멀티 포맷 업로더 + 파일명 날짜 자동 감지 (Excel 직접 업로드, docs/ 자동처리, 스마트 날짜 범위)
 - 🟡 미완성: 분석 리포트 (`analysis.py`는 stub — 헤더만 있음)
-- ❌ 미구현: Excel 직접 업로드, AI 카테고리 매핑, 예산 설정, 소비 예측, 이상탐지, 동적 차트, 사용자 인증
+- ❌ 미구현: GPT 카테고리 자동 매핑(Step 4), 이상 지출 탐지(Step 5), Burn-rate(Step 6), 자산 트렌드 Prophet(Step 7)
 
 ### 최근 주요 변경 이력
 
 | 항목 | 변경 내용 |
 |------|----------|
+| Step 3: 업로드 | ZIP+Excel 멀티포맷, docs/ 폴더 자동처리, 파일명 날짜 추출, 스마트 날짜 범위 |
+| Step 3: upload.py | 배치 처리 결과 세션 유지, 처리 후 파일 업로더 초기화, 결과 테이블(파일명/소유자/처리기간/처리결과) |
+| Step 2: 예산 | budgets 테이블, category_rules 통합 제거, sync_categories_from_transactions() |
+| Step 1: 인증 | streamlit-authenticator 로그인, admin/user 역할, 승인 대기 계정 관리 |
 | 챗봇 아키텍처 | 하드코딩 컨텍스트 주입 → GPT Function Calling으로 전환 |
-| 챗봇 UI | 예시 질문 버튼 6개, 대화 초기화 버튼, 메시지 카운터, ChatGPT 스타일 CSS |
-| 수입/지출 현황 | 상단 Metric 비교 기준: 전월 → 최근 1년 동기간 평균으로 변경 |
-| 수입/지출 현황 | 상세 필터 추가: 기간(이번 주/이번 달/전체), 수입/지출, 대분류, 지출 유형, 내용 검색 |
-| 사이드바 | 다크모드 대응 CSS 수정 (투명도 기반으로 변경) |
+| 사이드바 CSS | 다크모드 대응 + Primary 버튼 스코프 분리 (`[data-testid="stSidebar"]`) |
 
 ## 알려진 이슈
 
-- `get_previous_assets()`와 `get_chatbot_context()`에서 f-string SQL 사용 → 파라미터 바인딩 권장
 - `upload.py`에 ZIP 비밀번호 하드코딩 (형준=0979, 윤희=1223)
-- `db_handler.py`의 `save_transactions()`에 debug print문 존재
-- `get_chatbot_context()`는 챗봇 Function Calling 전환 후 미사용 상태 (코드 잔존)
 - `transactions.py`에 owner 보정 로직 하드코딩 (`Mega/페이코` → 윤희)
-- `transactions` 스키마에 `refined_category_1/2` 컬럼 정의되어 있으나 저장·활용 미구현
-- `langchain-community`, `plotly`는 requirements에 있으나 미사용
+- `transactions` 스키마에 `refined_category_1/2` 컬럼 정의되어 있으나 저장·활용 미구현 (Step 4에서 구현 예정)
+- `plotly`는 requirements에 있으나 미사용 (Step 6~9에서 활용 예정)
 
 ---
 
@@ -155,20 +176,18 @@ restart: always
 
 > **InAsset의 장기 비전:** 사후 정산 방식에서 벗어나 실시간 지출 통제 및 미래 자산 예측이 가능한 개인화 지능형 자산 관리 서비스
 
-### Step 0 - 착수 전 선행 기술 부채 정리
+### ✅ Step 0 - 착수 전 선행 기술 부채 정리
 
-로드맵 개발 착수 전 반드시 처리해야 할 항목들:
-
-| 항목 | 현재 문제 | 조치 |
-|------|----------|------|
-| debug print 제거 | `file_handler.py` `_preprocess_asset_df()` 전체, `db_handler.py` `save_transactions()` | 해당 print문 삭제 |
-| f-string SQL 수정 | `get_previous_assets()`, `get_chatbot_context()` — SQL 인젝션 취약 | 파라미터 바인딩(`?`)으로 교체 |
-| 미사용 코드 정리 | `get_chatbot_context()` Function Calling 전환 후 미사용 상태 | 삭제 또는 주석 처리 |
-| requirements 정비 | `streamlit-authenticator` 미추가. `langchain-community` 미사용 | 추가/제거 |
+| 항목 | 조치 | 상태 |
+|------|------|------|
+| debug print 제거 | `_parse_asset_sheet()`, `save_transactions()` print문 삭제 | ✅ |
+| f-string SQL 수정 | `get_previous_assets()`, `get_chatbot_context()` 파라미터 바인딩(`?`)으로 교체 | ✅ |
+| 미사용 코드 정리 | `get_chatbot_context()` 제거, `langchain-community` requirements에서 제거 | ✅ |
+| requirements 정비 | `streamlit-authenticator` 추가, `langchain-community` 제거 | ✅ |
 
 ---
 
-### Step 1 — 로그인 및 보안 강화
+### ✅ Step 1 — 로그인 및 보안 강화
 
 **목표:** Cloudflare Tunnel을 통해 외부에 노출된 앱에 인증 레이어를 추가한다. 모든 기능 개발 전 선행 완료.
 
@@ -187,7 +206,7 @@ restart: always
 
 ---
 
-### Step 2 — 목표 예산 설정
+### ✅ Step 2 — 목표 예산 설정
 
 **목표:** AI 분석의 기준점이 될 예산 데이터를 확보한다. Step 6(Burn-rate)의 필수 선행 조건.
 
@@ -215,7 +234,7 @@ budgets (
 
 ---
 
-### Step 3 — 멀티 포맷 업로더 + 파일명 기반 날짜 자동 감지
+### ✅ Step 3 — 멀티 포맷 업로더 + 파일명 기반 날짜 자동 감지
 
 **목표:** ZIP 외 Excel 직접 업로드를 지원하고, 파일명에서 기준 날짜를 추출하여 데이터 정확성을 높인다.
 
@@ -380,14 +399,12 @@ budgets (
 ### 전체 구현 순서 한눈에 보기
 
 ```
-[선행] 기술 부채 정리
-       └─ debug print 제거, f-string SQL 수정, 미사용 코드 정리, requirements 정비
+[✅완료] Step 0: 기술 부채 정리
+[✅완료] Step 1: 로그인/인증
+[✅완료] Step 2: 목표 예산 설정
+[✅완료] Step 3: 멀티 포맷 업로더 + 파일명 날짜 자동 감지
 
-Step 1 → 로그인/인증 (보안 — 모든 기능 개발 전 선행)
-
-Step 2 → 목표 예산 설정        ← Step 6의 선행 조건
-Step 3 → 멀티 포맷 업로더      ← Step 4, 마이그레이션의 선행 조건
-Step 4 → GPT 카테고리 자동 매핑
+Step 4 → GPT 카테고리 자동 매핑      ← 다음 단계
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   [ 데이터 마이그레이션: 22~25년 4년치 일괄 업로드 ]
