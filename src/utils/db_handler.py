@@ -106,8 +106,6 @@ def save_transactions(df, owner=None, filename="unknown.xlsx"):
         cursor = conn.cursor()
         
         # 2. "감지된 기간" 내의 "해당 소유자" 데이터만 삭제
-        print(f"Update Range: {min_date} ~ {max_date} (Owner: {owner})") # 디버깅용 로그
-        
         delete_query = "DELETE FROM transactions WHERE owner = ? AND date >= ? AND date <= ?"
         cursor.execute(delete_query, (owner, min_date, max_date))
         
@@ -289,27 +287,27 @@ def get_previous_assets(target_date, owner):
     try:
         # 1. 해당 소유자의 snapshot_date들 중 target_date와 차이(절대값)가 가장 작은 날짜 1개를 찾습니다.
         # strftime('%s', ...)는 날짜를 초 단위 타임스탬프로 변환하여 계산 가능하게 합니다.
-        find_date_query = f"""
-            SELECT snapshot_date 
-            FROM asset_snapshots 
-            WHERE owner = '{owner}'
-            ORDER BY ABS(strftime('%s', snapshot_date) - strftime('%s', '{target_date}')) ASC
+        find_date_query = """
+            SELECT snapshot_date
+            FROM asset_snapshots
+            WHERE owner = ?
+            ORDER BY ABS(strftime('%s', snapshot_date) - strftime('%s', ?)) ASC
             LIMIT 1
         """
-        closest_date_df = pd.read_sql(find_date_query, conn)
-        
+        closest_date_df = pd.read_sql(find_date_query, conn, params=(owner, target_date))
+
         if closest_date_df.empty:
             return pd.DataFrame()
-            
+
         closest_date = closest_date_df.iloc[0]['snapshot_date']
-        
+
         # 2. 찾은 '가장 근사한 날짜'에 해당하는 그 소유자의 모든 자산 내역을 가져옵니다.
-        query = f"""
-            SELECT * FROM asset_snapshots  
-            WHERE owner = '{owner}' 
-              AND snapshot_date = '{closest_date}'
+        query = """
+            SELECT * FROM asset_snapshots
+            WHERE owner = ?
+              AND snapshot_date = ?
         """
-        df = pd.read_sql(query, conn)
+        df = pd.read_sql(query, conn, params=(owner, closest_date))
         return df
         
     finally:
@@ -355,177 +353,3 @@ def execute_query_safe(sql: str, max_rows: int = 200) -> str:
         return f"쿼리 실행 오류: {str(e)}"
 
 
-def get_chatbot_context(limit_recent=20, period_months=3):
-    """
-    챗봇에게 전달할 금융 데이터 컨텍스트를 생성합니다.
-    
-    Args:
-        limit_recent: 최근 거래 내역 개수 (기본 20건)
-        period_months: 통계 집계 기간 (기본 3개월)
-    
-    Returns:
-        str: 포맷팅된 컨텍스트 문자열
-    """
-    if not os.path.exists(DB_PATH):
-        return "아직 데이터가 없습니다. 먼저 데이터를 업로드해주세요."
-    
-    try:
-        with sqlite3.connect(DB_PATH) as conn:
-            # 1. 기간 계산 (최근 N개월)
-            from datetime import datetime, timedelta
-            end_date = datetime.now()
-            start_date = end_date - timedelta(days=period_months * 30)
-            start_date_str = start_date.strftime('%Y-%m-%d')
-            
-            # 2. 기간별 수입/지출 요약
-            summary_query = f"""
-            SELECT
-                tx_type,
-                owner,
-                SUM(amount) as total
-            FROM transactions
-            WHERE date >= '{start_date_str}'
-            GROUP BY tx_type, owner
-            ORDER BY tx_type DESC, owner
-            """
-            summary_df = pd.read_sql_query(summary_query, conn)
-            
-            # 3. 카테고리별 지출 통계 (지출만, 상위 5개)
-            category_query = f"""
-            SELECT
-                category_1,
-                SUM(amount) as total,
-                COUNT(*) as count
-            FROM transactions
-            WHERE date >= '{start_date_str}' AND tx_type = '지출'
-            GROUP BY category_1
-            ORDER BY total DESC
-            LIMIT 5
-            """
-            category_df = pd.read_sql_query(category_query, conn)
-            
-            # 4. 고정비/변동비 분석
-            expense_type_query = f"""
-            SELECT
-                IFNULL(R.expense_type, '미분류') as expense_type,
-                SUM(T.amount) as total
-            FROM transactions T
-            LEFT JOIN category_rules R ON T.category_1 = R.category_name
-            WHERE T.date >= '{start_date_str}' AND T.tx_type = '지출'
-            GROUP BY expense_type
-            """
-            expense_type_df = pd.read_sql_query(expense_type_query, conn)
-            
-            # 5. 최근 거래 내역
-            recent_query = f"""
-            SELECT
-                date,
-                category_1,
-                description,
-                amount,
-                owner,
-                tx_type
-            FROM transactions
-            ORDER BY date DESC, time DESC
-            LIMIT {limit_recent}
-            """
-            recent_df = pd.read_sql_query(recent_query, conn)
-            
-            # 6. 컨텍스트 문자열 생성
-            context = f"=== 최근 {period_months}개월 재무 현황 ===\n\n"
-            
-            # 수입/지출 요약
-            if not summary_df.empty:
-                total_income = summary_df[summary_df['tx_type'] == '수입']['total'].sum()
-                total_expense = summary_df[summary_df['tx_type'] == '지출']['total'].sum()
-                net_change = total_income - total_expense
-                
-                context += f"• 총 수입: {total_income:,}원\n"
-                context += f"• 총 지출: {total_expense:,}원\n"
-                context += f"• 순자산 변화: {net_change:+,}원\n\n"
-                
-                # 소유자별 세부 내역
-                context += "소유자별 내역:\n"
-                for _, row in summary_df.iterrows():
-                    context += f"  - {row['owner']} {row['tx_type']}: {row['total']:,}원\n"
-                context += "\n"
-            
-            # 카테고리별 지출 TOP 5
-            if not category_df.empty:
-                context += "=== 카테고리별 지출 TOP 5 ===\n"
-                total_expense = category_df['total'].sum()
-                for idx, row in category_df.iterrows():
-                    percentage = (row['total'] / total_expense * 100) if total_expense > 0 else 0
-                    context += f"{idx+1}. {row['category_1']}: {row['total']:,}원 ({percentage:.1f}%, {row['count']}건)\n"
-                context += "\n"
-            
-            # 고정비/변동비 분석
-            if not expense_type_df.empty:
-                context += "=== 고정비 vs 변동비 ===\n"
-                total = expense_type_df['total'].sum()
-                for _, row in expense_type_df.iterrows():
-                    percentage = (row['total'] / total * 100) if total > 0 else 0
-                    context += f"• {row['expense_type']}: {row['total']:,}원 ({percentage:.1f}%)\n"
-                context += "\n"
-            
-            # 최근 거래 내역
-            if not recent_df.empty:
-                context += f"=== 최근 거래 내역 ({limit_recent}건) ===\n"
-                for _, row in recent_df.iterrows():
-                    context += f"[{row['date']}] {row['tx_type']} | {row['category_1']} | {row['description']} | {row['amount']:,}원 | {row['owner']}\n"
-            
-            return context
-            
-    except Exception as e:
-        return f"데이터 조회 중 오류가 발생했습니다: {str(e)}"
-
-# ## 변경전 정의 함수
-# def load_from_db():
-#     if not os.path.exists(DB_PATH):
-#         return None
-    
-#     with sqlite3.connect(DB_PATH) as conn:
-#         try:
-#             query = "SELECT * FROM ledger ORDER BY 날짜 DESC, 시간 DESC"
-#             df = pd.read_sql(query, conn)
-#             return df
-#         except Exception:
-#             return None
-
-# def get_ai_context():
-#     """
-#     GPT에게 전달할 통계 및 최근 내역 요약본 생성
-#     """
-#     if not os.path.exists(DB_PATH):
-#         return "아직 데이터가 없습니다."
-
-#     with sqlite3.connect(DB_PATH) as conn:
-#         try:
-#             # 1. 카테고리별 지출 합계 (수입은 제외하거나, 양수/음수 표기 필요)
-#             # 보통 지출 분석이 목적이므로 금액 < 0 인 것만 분석하는 경우도 많음
-#             # 여기서는 전체 합계를 구하되, 보기 좋게 정렬
-#             cat_query = """
-#             SELECT 대분류, SUM(금액) as 합계
-#             FROM ledger
-#             GROUP BY 대분류
-#             ORDER BY 합계 ASC
-#             """
-#             cat_df = pd.read_sql_query(cat_query, conn)
-            
-#             # 2. 최근 10건의 상세 내역 (토큰 절약을 위해 15 -> 10건으로 축소 추천)
-#             recent_query = """
-#             SELECT 날짜, 대분류, 내용, 금액 
-#             FROM ledger 
-#             ORDER BY 날짜 DESC, 시간 DESC 
-#             LIMIT 10
-#             """
-#             recent_df = pd.read_sql_query(recent_query, conn)
-            
-#             # 문자열로 변환
-#             context = "[카테고리별 누적 합계 (단위:원)]\n" + cat_df.to_string(index=False)
-#             context += "\n\n[최근 소비 내역 10건]\n" + recent_df.to_string(index=False)
-            
-#             return context
-            
-#         except Exception as e:
-#             return f"데이터 조회 중 오류 발생: {str(e)}"

@@ -1,8 +1,8 @@
 streamlit
+streamlit-authenticator
 pandas
 pyzipper
 openpyxl
-langchain-community
 openai
 python-dotenv
 tabulate
