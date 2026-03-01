@@ -39,15 +39,31 @@ def _init_db():
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS asset_snapshots (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                snapshot_date TEXT, 
+                snapshot_date TEXT,
                 balance_type TEXT,  -- 구분 (자산/부채)
                 asset_type TEXT,    -- 항목 (예: 자유입출금 자산, 신탁 자산, 저축성 자산 등)
                 account_name TEXT,  -- 상품명 (예: 신한 주거래 우대통장)
                 amount INTEGER,     -- 금액
-                owner TEXT,         
+                owner TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+
+        # 3. 목표 예산 테이블 (Budgets)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS budgets (
+                category       TEXT PRIMARY KEY,  -- category_rules.category_name과 동일
+                monthly_amount INTEGER DEFAULT 0, -- 월 예산 (원 단위)
+                is_fixed_cost  INTEGER DEFAULT 0, -- 1=고정, 0=변동
+                sort_order     INTEGER DEFAULT 0  -- 표시 순서
+            )
+        """)
+
+        # 마이그레이션: sort_order 컬럼이 없는 기존 DB에 추가
+        try:
+            cursor.execute("ALTER TABLE budgets ADD COLUMN sort_order INTEGER DEFAULT 0")
+        except Exception:
+            pass  # 이미 존재하면 무시
 
 def get_connection():
     """데이터베이스 연결 객체를 반환합니다."""
@@ -308,6 +324,106 @@ def get_previous_assets(target_date, owner):
         
     finally:
         conn.close()
+
+def init_budgets():
+    """
+    budgets 테이블에 데이터가 없을 때 category_rules 기반으로 기본 행을 초기화합니다.
+    이미 데이터가 있으면 아무것도 하지 않습니다.
+    """
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    db_path_fixed = os.path.join(base_dir, '../../data/inasset_v1.db')
+
+    with sqlite3.connect(db_path_fixed) as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM budgets")
+        if cursor.fetchone()[0] > 0:
+            return
+
+        cursor.execute("""
+            INSERT OR IGNORE INTO budgets (category, monthly_amount, is_fixed_cost, sort_order)
+            SELECT
+                category_name,
+                0,
+                CASE WHEN expense_type = '고정 지출' THEN 1 ELSE 0 END,
+                ROW_NUMBER() OVER (ORDER BY CASE WHEN expense_type = '고정 지출' THEN 0 ELSE 1 END, category_name)
+            FROM category_rules
+        """)
+        conn.commit()
+
+
+def get_budgets() -> pd.DataFrame:
+    """
+    budgets 테이블 전체를 반환합니다.
+    비어 있으면 init_budgets()를 먼저 실행합니다.
+    """
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    db_path_fixed = os.path.join(base_dir, '../../data/inasset_v1.db')
+
+    if not os.path.exists(db_path_fixed):
+        return pd.DataFrame(columns=['category', 'monthly_amount', 'is_fixed_cost'])
+
+    init_budgets()
+
+    with sqlite3.connect(db_path_fixed) as conn:
+        df = pd.read_sql_query(
+            "SELECT category, monthly_amount, is_fixed_cost, sort_order FROM budgets ORDER BY sort_order, category",
+            conn,
+        )
+    return df
+
+
+def save_budgets(df: pd.DataFrame):
+    """
+    예산 데이터프레임을 budgets 테이블에 저장합니다.
+    기존 데이터를 모두 교체합니다.
+    """
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    db_path_fixed = os.path.join(base_dir, '../../data/inasset_v1.db')
+
+    required = {'category', 'monthly_amount', 'is_fixed_cost', 'sort_order'}
+    if not required.issubset(df.columns):
+        raise ValueError(f"budgets 저장에 필요한 컬럼이 없습니다: {required - set(df.columns)}")
+
+    save_df = df[['category', 'monthly_amount', 'is_fixed_cost', 'sort_order']].copy()
+    save_df['monthly_amount'] = save_df['monthly_amount'].fillna(0).astype(int)
+    save_df['is_fixed_cost'] = save_df['is_fixed_cost'].astype(int)
+    save_df['sort_order'] = save_df['sort_order'].fillna(0).astype(int)
+
+    with sqlite3.connect(db_path_fixed) as conn:
+        conn.execute("DELETE FROM budgets")
+        save_df.to_sql('budgets', conn, if_exists='append', index=False)
+        conn.commit()
+
+
+def get_category_avg_monthly(months: int = 12) -> pd.DataFrame:
+    """
+    최근 N개월간 카테고리별 월평균 지출 금액을 반환합니다.
+    Returns: DataFrame with columns [category_1, avg_monthly]
+    """
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    db_path_fixed = os.path.join(base_dir, '../../data/inasset_v1.db')
+
+    if not os.path.exists(db_path_fixed):
+        return pd.DataFrame(columns=['category_1', 'avg_monthly'])
+
+    query = """
+        SELECT
+            category_1,
+            ROUND(
+                SUM(amount) * 1.0 / COUNT(DISTINCT strftime('%Y-%m', date))
+            ) AS avg_monthly
+        FROM transactions
+        WHERE tx_type = '지출'
+          AND date >= date('now', ?)
+        GROUP BY category_1
+    """
+    param = f'-{months} months'
+
+    with sqlite3.connect(db_path_fixed) as conn:
+        df = pd.read_sql_query(query, conn, params=(param,))
+
+    return df
+
 
 def execute_query_safe(sql: str, max_rows: int = 200) -> str:
     """

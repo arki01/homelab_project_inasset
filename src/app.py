@@ -8,10 +8,10 @@ from yaml.loader import SafeLoader
 import streamlit_authenticator as stauth
 
 from utils.db_handler import _init_db, init_category_rules
-from pages import upload, assets, transactions, analysis, chatbot, login
+from pages import upload, assets, transactions, analysis, chatbot, login, budget
 
 # 1. 페이지 설정 (반드시 첫 번째)
-st.set_page_config(page_title="InAsset MVP", layout="wide", page_icon="🏛️")
+st.set_page_config(page_title="InAsset", layout="wide", page_icon="🏛️")
 
 # 2. DB 및 환경변수 초기화
 _init_db()
@@ -115,7 +115,7 @@ st.session_state['role'] = _role
 
 # 8. 세션 상태 초기화
 if 'menu' not in st.session_state:
-    st.session_state.menu = "💰 수입/지출 현황"
+    st.session_state.menu = "🎯 목표 예산"
 
 # 9. 사이드바 구성
 with st.sidebar:
@@ -125,6 +125,7 @@ with st.sidebar:
 
     # 메뉴 구성
     menu_options = [
+        "🎯 목표 예산",
         "💰 수입/지출 현황",
         "🏦 자산 현황",
         "📊 분석 리포트",
@@ -186,7 +187,9 @@ with st.sidebar:
 # 10. 현재 선택된 메뉴에 따른 화면 렌더링
 current_menu = st.session_state.menu
 
-if "수입/지출 현황" in current_menu:
+if "목표 예산" in current_menu:
+    budget.render()
+elif "수입/지출 현황" in current_menu:
     transactions.render()
 elif "자산 현황" in current_menu:
     assets.render()
