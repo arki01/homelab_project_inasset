@@ -209,32 +209,52 @@ def get_analyzed_transactions():
 def save_asset_snapshot(df, owner=None, snapshot_date=None):
     """
     추출된 자산 데이터를 asset_snapshots 테이블에 저장합니다.
-    
+    동일한 (snapshot_date, owner) 조합이 이미 존재하면 덮어씁니다.
+
     Args:
         df: 자산 데이터프레임 (owner 컬럼 포함 권장)
         owner: 소유자 (df에 owner가 없을 때만 사용)
-        snapshot_date: 스냅샷 날짜 (YYYY-MM-DD HH:MM:SS 형식)
+        snapshot_date: 스냅샷 날짜 (YYYY-MM-DD 형식으로 저장)
     """
-    _init_db() # 테이블이 없으면 생성
-    
+    _init_db()
+
     df = df.copy()
-    
-    # 1. 데이터프레임에 공통 정보(소유자, 날짜) 추가
-    # df에 owner가 없을 때만 파라미터 값 사용
+
     if 'owner' not in df.columns or df['owner'].isna().all():
         df['owner'] = owner
-    
-    # snapshot_date는 항상 파라미터로부터 사용 (최신 날짜로)
+
+    # snapshot_date를 YYYY-MM-DD 형식으로 정규화
     if snapshot_date:
-        df['snapshot_date'] = snapshot_date
-    
-    # 2. DB 저장
+        normalized_date = pd.to_datetime(snapshot_date).strftime('%Y-%m-%d')
+        df['snapshot_date'] = normalized_date
+
+    target_date = df['snapshot_date'].iloc[0]
+    target_owner = df['owner'].iloc[0]
+
     with sqlite3.connect(DB_PATH) as conn:
-        # 데이터가 많지 않으므로 append 방식으로 계속 누적 (스냅샷이므로)
+        # 동일 날짜 + 소유자 기존 데이터 삭제 후 재삽입
+        conn.execute(
+            "DELETE FROM asset_snapshots WHERE snapshot_date = ? AND owner = ?",
+            (target_date, target_owner)
+        )
         df.to_sql('asset_snapshots', conn, if_exists='append', index=False)
         conn.commit()
-    
+
     return len(df)
+
+
+def clear_all_data():
+    """
+    transactions, asset_snapshots 테이블의 모든 데이터를 삭제합니다.
+    테이블 구조(스키마)는 유지됩니다.
+    """
+    if not os.path.exists(DB_PATH):
+        return
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute("DELETE FROM transactions")
+        conn.execute("DELETE FROM asset_snapshots")
+        conn.commit()
+
 
 def get_latest_assets():
     """

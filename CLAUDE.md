@@ -224,6 +224,7 @@ budgets (
 - ZIP: 기존 `process_uploaded_zip()` 유지
 - Excel 직접 업로드: `file_handler.py`에 `process_uploaded_excel()` 함수 신규 작성
 - **파일명에서 날짜 자동 추출:** 파일명 패턴에서 기준 날짜(end_date)를 파싱하여 `snapshot_date`로 사용
+- docs 폴더에서 등록된 최신 파일에 대해 자동 업데이트 로직 추가 (신규 이메일 Event 기반 자동 수신됨)
 
 **날짜 추출 규칙**
 ```

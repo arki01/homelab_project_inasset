@@ -24,8 +24,8 @@ st.markdown("""
     /* 사이드바 상단 기본 메뉴 숨기기 */
     [data-testid="stSidebarNav"] { display: none; }
 
-    /* 메뉴 버튼 */
-    .stButton > button {
+    /* 사이드바 메뉴 버튼 */
+    [data-testid="stSidebar"] .stButton > button {
         width: 100%;
         border-radius: 10px;
         border: 1px solid rgba(128, 128, 128, 0.35);
@@ -38,13 +38,13 @@ st.markdown("""
         align-items: center;
         justify-content: flex-start;
     }
-    .stButton > button[kind="primary"] {
+    [data-testid="stSidebar"] .stButton > button[kind="primary"] {
         background: linear-gradient(135deg, #6a11cb 0%, #2575fc 100%);
         color: white;
         border: none;
         box-shadow: 0 4px 15px rgba(0,0,0,0.1);
     }
-    .stButton > button:hover {
+    [data-testid="stSidebar"] .stButton > button:hover {
         border-color: #2575fc;
         color: #2575fc;
         transform: translateY(-2px);

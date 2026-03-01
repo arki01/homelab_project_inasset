@@ -1,47 +1,48 @@
 import streamlit as st
 import pandas as pd
-import os
 import datetime
 import time
-from utils.db_handler import DB_PATH, save_transactions, save_asset_snapshot
-from utils.file_handler import process_uploaded_zip, format_df_for_display
+from utils.db_handler import save_transactions, save_asset_snapshot, clear_all_data
+from utils.file_handler import process_uploaded_zip, process_uploaded_excel, extract_snapshot_date, format_df_for_display
 
 def render():
     st.header("📥 가계부 업로드")
     st.caption("우리 부부의 가계부 기록을 통합하는 첫 단계입니다.")
 
     with st.container(border=True):
-        uploaded_file = st.file_uploader("뱅크샐러드 ZIP 파일을 업로드하세요", type=None)
+        uploaded_file = st.file_uploader(
+            "뱅크샐러드 ZIP 또는 Excel 파일을 업로드하세요",
+            type=["zip", "xlsx", "xls"],
+        )
         extracted_owner = None
         default_password = None
-          
+        is_zip = uploaded_file and uploaded_file.name.lower().endswith('.zip')
+
         # 파일명에서 소유자 추출, 소유자별 기본 비밀번호 설정
         if uploaded_file:
             filename = uploaded_file.name  # 예: '조윤희님_2025-01-31~2026-01-31.zip'
 
             if '님_' in filename:
                 full_name = filename.split('님_')[0]  # '조윤희님_...' -> '조윤희'
-                # 성을 제외한 이름만 추출 (마지막 1글자 = 이름)
                 extracted_owner = full_name[1:3] if len(full_name) > 0 else None
 
             default_password = ""
-            if extracted_owner == "형준": 
+            if extracted_owner == "형준":
                 default_password = "0979"
-            elif extracted_owner == "윤희": 
+            elif extracted_owner == "윤희":
                 default_password = "1223"
-        
-        password = st.text_input("ZIP 파일 비밀번호", type="password", value=default_password)
 
-    if uploaded_file and password:
-        # 파일명에서 소유자 추출
-        filename = uploaded_file.name  # 예: '조윤희님_2025-01-31~2026-01-31.zip'
-        extracted_owner = None
-        
-        if '님_' in filename:
-            full_name = filename.split('님_')[0]  # '조윤희님_...' -> '조윤희'
-            # 성을 제외한 이름만 추출 (마지막 1글자 = 이름)
-            extracted_owner = full_name[1:3] if len(full_name) > 0 else None
-        
+        password = st.text_input(
+            "ZIP 파일 비밀번호",
+            type="password",
+            value=default_password if is_zip else "",
+            disabled=not is_zip,
+            help="ZIP 파일에만 해당됩니다.",
+        )
+
+    if uploaded_file and (not is_zip or password):
+        filename = uploaded_file.name
+
         with st.container(border=True):
             # 추출된 소유자가 있으면 선택값으로 설정, 없으면 기본값
             owner_options = ["형준", "윤희"]
@@ -82,7 +83,10 @@ def render():
                 if upload_mode == "특정 기간 (기본값: 현재 ~ 1개월 전)" and len(upload_period) == 2:
                     s_date, e_date = upload_period
 
-                tx_df, asset_df, error = process_uploaded_zip(uploaded_file, password, start_date=s_date, end_date=e_date)
+                if is_zip:
+                    tx_df, asset_df, error = process_uploaded_zip(uploaded_file, password, start_date=s_date, end_date=e_date)
+                else:
+                    tx_df, asset_df, error = process_uploaded_excel(uploaded_file, start_date=s_date, end_date=e_date)
 
                 if error:
                     st.error(f"❌ {error}")
@@ -135,11 +139,11 @@ def render():
                     asset_count = 0
                     if st.session_state.get('temp_asset_df') is not None and not st.session_state['temp_asset_df'].empty:
                         temp_asset = st.session_state['temp_asset_df']
-                        now_str = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                        snapshot_date = extract_snapshot_date(filename)
                         asset_count = save_asset_snapshot(
                             temp_asset,
                             owner=owner,
-                            snapshot_date=now_str
+                            snapshot_date=snapshot_date,
                         )
 
                     if tx_count > 0 or asset_count > 0:
@@ -170,31 +174,28 @@ def render():
 
     st.divider()
 
-    @st.dialog("DB 삭제 확인")
-    def open_delete_modal():
-        st.write("이 작업은 되돌릴 수 없으며, 저장된 모든 가계부 내역과 자산 정보가 영구적으로 사라집니다.")
-        col1, col2 = st.columns([1, 1])
-        
-        with col1:
-            if st.button("네, 삭제합니다", type="primary", use_container_width=True):
-                if os.path.exists(DB_PATH):
+    if st.session_state.get('role') == 'admin':
+
+        @st.dialog("데이터 초기화 확인")
+        def open_delete_modal():
+            st.write("이 작업은 되돌릴 수 없으며, 저장된 모든 가계부 내역과 자산 정보가 영구적으로 삭제됩니다. (테이블 구조는 유지)")
+            col1, col2 = st.columns([1, 1])
+
+            with col1:
+                if st.button("네, 초기화합니다", type="primary", use_container_width=True):
                     try:
-                        os.remove(DB_PATH)
-                        st.success("삭제 완료! 잠시 후 새로고침 됩니다.")
+                        clear_all_data()
+                        st.success("초기화 완료! 잠시 후 새로고침 됩니다.")
                         time.sleep(1.5)
                         st.rerun()
                     except Exception as e:
                         st.error(f"오류: {e}")
-                else:
-                    st.warning("삭제할 데이터베이스가 없습니다.")
-                    time.sleep(1)
+
+            with col2:
+                if st.button("아니오, 취소합니다", use_container_width=True):
                     st.rerun()
 
-        with col2:
-            if st.button("아니오, 취소합니다", use_container_width=True):
-                st.rerun()
+        if st.button("DB 데이터 초기화", type="primary", use_container_width=True):
+            open_delete_modal()
 
-    if st.button("DB 전체 삭제", type="primary", use_container_width=True):
-        open_delete_modal()
-        
     st.markdown("<div style='margin-bottom: 40px;'></div>", unsafe_allow_html=True)
