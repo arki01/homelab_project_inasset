@@ -7,7 +7,7 @@ from yaml.loader import SafeLoader
 
 import streamlit_authenticator as stauth
 
-from utils.db_handler import _init_db, init_category_rules
+from utils.db_handler import _init_db
 from pages import upload, assets, transactions, analysis, chatbot, login, budget
 
 # 1. 페이지 설정 (반드시 첫 번째)
@@ -15,7 +15,6 @@ st.set_page_config(page_title="InAsset", layout="wide", page_icon="🏛️")
 
 # 2. DB 및 환경변수 초기화
 _init_db()
-init_category_rules()
 load_dotenv()
 
 # 3. 전역 CSS 주입

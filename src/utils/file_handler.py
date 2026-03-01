@@ -2,22 +2,91 @@ import pyzipper
 import pandas as pd
 import io
 import re
+import os
 import datetime
 
-def extract_snapshot_date(filename: str) -> str:
+DOCS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '../../docs')
+
+def detect_owner_from_filename(filename: str) -> str | None:
     """
-    파일명에서 기준 날짜(end_date)를 추출합니다.
+    파일명에서 소유자를 추출합니다.
 
     패턴 예시:
-      '조윤희님_2024-02-01~2025-02-01.zip'  → '2025-02-01'
-      '2024-02-01~2025-02-01_나.xlsx'       → '2025-02-01'
+      '조윤희님_2024-02-01~2025-02-01.zip'  → '윤희'  (ZIP: 님_ 패턴)
+      '조형준님_2024-02-01~2025-02-01.zip'  → '형준'  (ZIP: 님_ 패턴)
+      '2024-06-01~2025-06-01_내사랑.xlsx'   → '윤희'  (Excel: _내사랑 suffix)
+      '2024-06-01~2025-06-01_나.xlsx'       → '형준'  (Excel: _나 suffix)
+      '2024-06-01~2025-06-01.xlsx'          → '형준'  (Excel: 날짜만, suffix 없음)
 
-    패턴이 없으면 오늘 날짜를 반환합니다.
+    인식 불가 시 None 반환.
     """
-    match = re.search(r'\d{4}-\d{2}-\d{2}~(\d{4}-\d{2}-\d{2})', filename)
+    # ZIP: '님_' 패턴 (조윤희님_, 조형준님_)
+    if '님_' in filename:
+        full_name = filename.split('님_')[0]
+        name = full_name[1:3] if len(full_name) > 1 else None
+        if name in ('형준', '윤희'):
+            return name
+
+    # Excel: 날짜 범위 패턴 이후 suffix로 판별
+    stem = re.sub(r'\.(xlsx?|zip)$', '', filename, flags=re.IGNORECASE)
+    date_match = re.search(r'\d{4}-\d{2}-\d{2}~\d{4}-\d{2}-\d{2}(.*)', stem)
+    if date_match:
+        suffix = date_match.group(1).lstrip('_')
+        if '내사랑' in suffix:
+            return '윤희'
+        return '형준'  # '_나', suffix 없음(날짜만) 모두 형준
+
+    return None
+
+
+def scan_docs_folder() -> list:
+    """
+    docs/ 폴더의 ZIP/Excel 파일을 스캔하여 처리 메타데이터 목록을 반환합니다.
+
+    Returns:
+        list of dict: {filename, owner, snapshot_date, start_date}
+    """
+    if not os.path.exists(DOCS_DIR):
+        os.makedirs(DOCS_DIR, exist_ok=True)
+        return []
+
+    result = []
+    for fname in os.listdir(DOCS_DIR):
+        if not fname.lower().endswith(('.zip', '.xlsx', '.xls')):
+            continue
+        start_str, snapshot_str = extract_date_range(fname)
+        if start_str is None:
+            start_str = str(datetime.date.fromisoformat(snapshot_str) - datetime.timedelta(days=30))
+        result.append({
+            'filename': fname,
+            'owner': detect_owner_from_filename(fname),
+            'snapshot_date': snapshot_str,
+            'start_date': start_str,
+        })
+    return result
+
+
+def extract_date_range(filename: str) -> tuple:
+    """
+    파일명에서 (start_date, end_date) 문자열 쌍을 추출합니다.
+
+    패턴 예시:
+      '조윤희님_2024-02-01~2025-02-01.zip'  → ('2024-02-01', '2025-02-01')
+      '2024-02-01~2025-02-01_나.xlsx'       → ('2024-02-01', '2025-02-01')
+
+    패턴이 없으면 (None, 오늘 날짜) 반환.
+    """
+    match = re.search(r'(\d{4}-\d{2}-\d{2})~(\d{4}-\d{2}-\d{2})', filename)
     if match:
-        return match.group(1)
-    return datetime.date.today().strftime('%Y-%m-%d')
+        return match.group(1), match.group(2)
+    today = datetime.date.today().strftime('%Y-%m-%d')
+    return None, today
+
+
+def extract_snapshot_date(filename: str) -> str:
+    """파일명에서 기준 날짜(end_date)를 추출합니다. 패턴 없으면 오늘 날짜 반환."""
+    _, end_date = extract_date_range(filename)
+    return end_date
 
 
 def process_uploaded_excel(uploaded_file, start_date=None, end_date=None):
@@ -86,12 +155,14 @@ def _parse_excel_sheets(excel_data, start_date=None, end_date=None):
         if len(excel_data.sheet_names) > 1:
             tx_df = pd.read_excel(excel_data, sheet_name=1)
 
-            if '날짜' in tx_df.columns:
-                tx_df['날짜'] = pd.to_datetime(tx_df['날짜'])
+            if '날짜' not in tx_df.columns:
+                return None, asset_df, f"거래내역 시트에 '날짜' 컬럼이 없습니다. (컬럼: {list(tx_df.columns)})"
 
-                if start_date and end_date:
-                    mask = (tx_df['날짜'].dt.date >= start_date) & (tx_df['날짜'].dt.date <= end_date)
-                    tx_df = tx_df.loc[mask].copy()
+            tx_df['날짜'] = pd.to_datetime(tx_df['날짜'])
+
+            if start_date and end_date:
+                mask = (tx_df['날짜'].dt.date >= start_date) & (tx_df['날짜'].dt.date <= end_date)
+                tx_df = tx_df.loc[mask].copy()
         else:
             return None, None, "엑셀 파일에 가계부 내역 시트(Sheet2)가 없습니다."
     except Exception as e:

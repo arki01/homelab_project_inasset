@@ -49,10 +49,10 @@ def _init_db():
             )
         """)
 
-        # 3. 목표 예산 테이블 (Budgets)
+        # 3. 목표 예산 테이블 (Budgets) — 카테고리 마스터 겸 예산 관리
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS budgets (
-                category       TEXT PRIMARY KEY,  -- category_rules.category_name과 동일
+                category       TEXT PRIMARY KEY,  -- transactions.category_1과 동일
                 monthly_amount INTEGER DEFAULT 0, -- 월 예산 (원 단위)
                 is_fixed_cost  INTEGER DEFAULT 0, -- 1=고정, 0=변동
                 sort_order     INTEGER DEFAULT 0  -- 표시 순서
@@ -63,7 +63,23 @@ def _init_db():
         try:
             cursor.execute("ALTER TABLE budgets ADD COLUMN sort_order INTEGER DEFAULT 0")
         except Exception:
-            pass  # 이미 존재하면 무시
+            pass
+
+        # 마이그레이션: category_rules 테이블 제거 (budgets로 통합)
+        try:
+            cursor.execute("DROP TABLE IF EXISTS category_rules")
+        except Exception:
+            pass
+
+        # 4. 처리 완료 파일 이력 테이블
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS processed_files (
+                filename      TEXT PRIMARY KEY,
+                owner         TEXT,
+                snapshot_date TEXT,
+                processed_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
 
 def get_connection():
     """데이터베이스 연결 객체를 반환합니다."""
@@ -131,62 +147,21 @@ def save_transactions(df, owner=None, filename="unknown.xlsx"):
 
     return len(final_df)    
 
-def init_category_rules():
-    """
-    고정비/변동비 규칙 테이블을 생성하고 데이터를 정의합니다.
-    """
-    # DB 경로가 올바른지 확인 (현재 db_handler.py 위치 기준 상대 경로 보정)
-    # 실행 위치에 따라 경로 에러가 날 수 있어 절대 경로로 보정하는 것이 안전합니다.
-    base_dir = os.path.dirname(os.path.abspath(__file__)) # utils 폴더
-    db_path_fixed = os.path.join(base_dir, '../../data/inasset_v1.db')
-    
-    with sqlite3.connect(db_path_fixed) as conn:
-        cursor = conn.cursor()
-
-        # 1. 규칙 테이블 생성
-        cursor.execute('''
-        CREATE TABLE IF NOT EXISTS category_rules (
-            category_name TEXT PRIMARY KEY, 
-            expense_type TEXT
-        )
-        ''')
-
-        # 2. 분류 규칙 정의 (엑셀 기준)
-        rules = [
-            # [고정 지출]
-            ('고정비', '고정 지출'), ('주거비', '고정 지출'), 
-            ('금융', '고정 지출'), ('보험', '고정 지출'),
-            # [변동 지출]
-            ('식비', '변동 지출'), ('생활비', '변동 지출'),
-            ('활동비', '변동 지출'), ('친목비', '변동 지출'),
-            ('꾸밈비', '변동 지출'), ('차량비', '변동 지출'),
-            ('교통비', '변동 지출'), ('여행비', '변동 지출'),
-            ('의료비', '변동 지출'), ('기여비', '변동 지출'),
-            ('양육비', '변동 지출'), ('예비비', '변동 지출'),
-            ('미분류', '변동 지출'),
-        ]
-
-        # 규칙 업데이트 (이미 있으면 무시하거나 덮어쓰기)
-        cursor.executemany('INSERT OR REPLACE INTO category_rules VALUES (?, ?)', rules)
-        conn.commit()
 
 def get_analyzed_transactions():
     """
-    transactions 테이블과 category_rules를 조인하여 
+    transactions 테이블과 budgets를 조인하여
     고정비/변동비가 마킹된 데이터를 반환합니다.
     """
-    # 경로 보정
     base_dir = os.path.dirname(os.path.abspath(__file__))
     db_path_fixed = os.path.join(base_dir, '../../data/inasset_v1.db')
 
     if not os.path.exists(db_path_fixed):
-        return pd.DataFrame() # 빈 데이터프레임 반환
+        return pd.DataFrame()
 
     with sqlite3.connect(db_path_fixed) as conn:
-        # JOIN 쿼리: 원본 transactions 테이블은 건드리지 않고 읽어올 때만 합칩니다.
-        # category_1 (대분류)을 기준으로 규칙을 찾습니다.
         query = '''
-        SELECT 
+        SELECT
             T.date,
             T.time,
             T.tx_type,
@@ -196,15 +171,13 @@ def get_analyzed_transactions():
             T.memo,
             T.owner,
             T.source,
-            IFNULL(R.expense_type, '미분류') as expense_type
+            CASE WHEN B.is_fixed_cost = 1 THEN '고정 지출' ELSE '변동 지출' END AS expense_type
         FROM transactions T
-        LEFT JOIN category_rules R ON T.category_1 = R.category_name
+        LEFT JOIN budgets B ON T.category_1 = B.category
         WHERE T.tx_type != '이체'
         ORDER BY T.date DESC, T.time DESC
         '''
-        
-        df = pd.read_sql_query(query, conn)
-        return df
+        return pd.read_sql_query(query, conn)
 
 def save_asset_snapshot(df, owner=None, snapshot_date=None):
     """
@@ -245,7 +218,7 @@ def save_asset_snapshot(df, owner=None, snapshot_date=None):
 
 def clear_all_data():
     """
-    transactions, asset_snapshots 테이블의 모든 데이터를 삭제합니다.
+    transactions, asset_snapshots, processed_files 테이블의 모든 데이터를 삭제합니다.
     테이블 구조(스키마)는 유지됩니다.
     """
     if not os.path.exists(DB_PATH):
@@ -253,6 +226,39 @@ def clear_all_data():
     with sqlite3.connect(DB_PATH) as conn:
         conn.execute("DELETE FROM transactions")
         conn.execute("DELETE FROM asset_snapshots")
+        conn.execute("DELETE FROM processed_files")
+        conn.commit()
+
+
+def has_transactions_in_range(owner: str, start_date: str, end_date: str) -> bool:
+    """지정 기간에 해당 소유자의 거래내역이 존재하는지 확인합니다."""
+    if not os.path.exists(DB_PATH):
+        return False
+    with sqlite3.connect(DB_PATH) as conn:
+        cursor = conn.execute(
+            "SELECT 1 FROM transactions WHERE owner = ? AND date >= ? AND date <= ? LIMIT 1",
+            (owner, start_date, end_date),
+        )
+        return cursor.fetchone() is not None
+
+
+def get_processed_filenames() -> set:
+    """처리 완료된 파일명 집합을 반환합니다."""
+    if not os.path.exists(DB_PATH):
+        return set()
+    with sqlite3.connect(DB_PATH) as conn:
+        cursor = conn.execute("SELECT filename FROM processed_files")
+        return {row[0] for row in cursor.fetchall()}
+
+
+def mark_file_processed(filename: str, owner: str, snapshot_date: str):
+    """파일 처리 완료를 기록합니다."""
+    _init_db()
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO processed_files (filename, owner, snapshot_date) VALUES (?, ?, ?)",
+            (filename, owner, snapshot_date),
+        )
         conn.commit()
 
 
@@ -347,7 +353,7 @@ def get_previous_assets(target_date, owner):
 
 def init_budgets():
     """
-    budgets 테이블에 데이터가 없을 때 category_rules 기반으로 기본 행을 초기화합니다.
+    budgets 테이블이 비어 있을 때 transactions(owner='형준')의 카테고리로 초기화합니다.
     이미 데이터가 있으면 아무것도 하지 않습니다.
     """
     base_dir = os.path.dirname(os.path.abspath(__file__))
@@ -362,11 +368,37 @@ def init_budgets():
         cursor.execute("""
             INSERT OR IGNORE INTO budgets (category, monthly_amount, is_fixed_cost, sort_order)
             SELECT
-                category_name,
+                category_1,
                 0,
-                CASE WHEN expense_type = '고정 지출' THEN 1 ELSE 0 END,
-                ROW_NUMBER() OVER (ORDER BY CASE WHEN expense_type = '고정 지출' THEN 0 ELSE 1 END, category_name)
-            FROM category_rules
+                0,
+                ROW_NUMBER() OVER (ORDER BY category_1)
+            FROM (SELECT DISTINCT category_1 FROM transactions
+                  WHERE owner = '형준' AND tx_type = '지출' AND category_1 IS NOT NULL)
+        """)
+        conn.commit()
+
+
+def sync_categories_from_transactions():
+    """
+    transactions(owner='형준')에서 신규 카테고리를 감지하여 budgets에 자동 추가합니다.
+    기존 budgets 데이터(예산액, 고정/변동 설정)는 유지됩니다.
+    transactions가 없으면 아무것도 하지 않습니다.
+    """
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    db_path_fixed = os.path.join(base_dir, '../../data/inasset_v1.db')
+
+    if not os.path.exists(db_path_fixed):
+        return
+
+    with sqlite3.connect(db_path_fixed) as conn:
+        conn.execute("""
+            INSERT OR IGNORE INTO budgets (category, monthly_amount, is_fixed_cost, sort_order)
+            SELECT DISTINCT category_1, 0, 0, 0
+            FROM transactions
+            WHERE owner = '형준'
+              AND tx_type = '지출'
+              AND category_1 IS NOT NULL
+              AND category_1 NOT IN (SELECT category FROM budgets)
         """)
         conn.commit()
 
