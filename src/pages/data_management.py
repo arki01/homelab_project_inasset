@@ -405,10 +405,8 @@ def render():
     st.markdown("""
         <style>
         .page-header {
-            text-align: center; padding: 2rem 0 0.5rem;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            -webkit-background-clip: text; -webkit-text-fill-color: transparent;
-            background-clip: text; font-size: 2.5rem; font-weight: 700;
+            text-align: center; padding: 1rem 0 0.5rem;
+            color: #000000; font-size: 2.5rem; font-weight: 700;
         }
         .page-subtitle {
             text-align: center; color: var(--text-color);
@@ -650,7 +648,7 @@ def render():
     st.divider()
 
     # ── Section 3: 기존 데이터 카테고리 업데이트 (GPT 기반) ────
-    st.subheader("카테고리 업데이트 (기존 데이터 기반)")
+    st.subheader("카테고리 정규화 (기존 데이터 기반)")
     st.caption("저장된 거래내역의 카테고리를 GPT로 재분류합니다. 기간을 선택하면 해당 기간 고유 항목을 분석합니다.")
 
     recat_results = st.session_state.get('recat_results')

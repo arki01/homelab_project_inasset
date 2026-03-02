@@ -7,10 +7,8 @@ def render():
     st.markdown("""
         <style>
         .page-header {
-            text-align: center; padding: 2rem 0 0.5rem;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            -webkit-background-clip: text; -webkit-text-fill-color: transparent;
-            background-clip: text; font-size: 2.5rem; font-weight: 700;
+            text-align: center; padding: 1rem 0 0.5rem;
+            color: #000000; font-size: 2.5rem; font-weight: 700;
         }
         .page-subtitle {
             text-align: center; color: var(--text-color);
@@ -167,5 +165,12 @@ def render_detail_table(df, key_suffix):
         filtered.sort_values('amount', ascending=False),
         use_container_width=True,
         hide_index=True,
-        column_config={"amount": st.column_config.NumberColumn("금액", format="%d원")}
+        column_config={
+            "snapshot_date": st.column_config.TextColumn("기준일"),
+            "balance_type": st.column_config.TextColumn("구분"),
+            "asset_type": st.column_config.TextColumn("분류"),
+            "account_name": st.column_config.TextColumn("자산명"),
+            "amount": st.column_config.NumberColumn("금액", format="%d원"),
+            "owner": st.column_config.TextColumn("소유자"),
+        }
     )

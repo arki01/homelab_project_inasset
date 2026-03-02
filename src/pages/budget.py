@@ -7,10 +7,8 @@ def render():
     st.markdown("""
         <style>
         .page-header {
-            text-align: center; padding: 2rem 0 0.5rem;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            -webkit-background-clip: text; -webkit-text-fill-color: transparent;
-            background-clip: text; font-size: 2.5rem; font-weight: 700;
+            text-align: center; padding: 1rem 0 0.5rem;
+            color: #000000; font-size: 2.5rem; font-weight: 700;
         }
         .page-subtitle {
             text-align: center; color: var(--text-color);

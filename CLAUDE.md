@@ -33,7 +33,7 @@ BankSalad ZIP 업로드
 | `src/pages/assets.py` | 🏦 자산 현황 |
 | `src/pages/chatbot.py` | 🤖 AI 챗봇 |
 | `src/pages/upload.py` | 📂 ZIP/Excel 업로드 + docs/ 자동처리 |
-| `src/pages/analysis.py` | 📊 분석 리포트 (stub) |
+| `src/pages/analysis.py` | 📊 분석 리포트 (이상 지출 탐지 / Burn-rate / 자산 트렌드) |
 | `src/utils/db_handler.py` | 모든 SQLite 작업 |
 | `src/utils/file_handler.py` | ZIP/Excel 파싱, 파일명 메타데이터 추출 |
 | `src/utils/ai_agent.py` | OpenAI API 래퍼 |
@@ -97,6 +97,7 @@ processed_files (
 - `get_processed_filenames()` — docs/ 처리 이력 파일명 set 반환
 - `mark_file_processed(filename, owner, snapshot_date)` — 처리 완료 기록
 - `clear_all_data()` — transactions, asset_snapshots, processed_files 전체 삭제
+- `get_asset_history()` — 전체 자산 스냅샷 이력을 snapshot_date × owner 기준 집계 (total_asset, total_debt, net_worth)
 - `execute_query_safe(sql, max_rows)` — 챗봇 Function Calling용 SELECT 쿼리 안전 실행기
 
 ### file_handler.py
@@ -150,28 +151,33 @@ restart: always
 - ✅ Step 2: 목표 예산 설정 (budgets 테이블, budget.py, 카테고리 자동 동기화)
 - ✅ Step 3: 멀티 포맷 업로더 + 파일명 날짜 자동 감지 (Excel 직접 업로드, docs/ 자동처리, 스마트 날짜 범위)
 - ✅ Step 4: GPT 카테고리 자동 매핑 (map_categories, STANDARD_CATEGORIES, 검수 UI)
-- 🟡 미완성: 분석 리포트 (`analysis.py`는 stub — 헤더만 있음)
-- ❌ 미구현: 이상 지출 탐지(Step 5), Burn-rate(Step 6), 자산 트렌드 Prophet(Step 7)
+- ✅ Step 5: 이상 지출 탐지 (2 표준편차 기준, 카테고리 드릴다운, analysis.py)
+- ✅ Step 6: Burn-rate 분석 (과거 12개월 일별 패턴 기반 월말 예측, 예산선, analysis.py)
+- ✅ Step 7: 자산 트렌드 MVP (순자산 추이 + 3개월 이동평균 + 2년 선형 예측, Prophet 미적용)
+- ❌ 미구현: NL-to-SQL 멀티턴(Step 8), 동적 시각화(Step 9)
 
 ### 최근 주요 변경 이력
 
 | 항목 | 변경 내용 |
 |------|----------|
+| Step 7: 자산 트렌드 예측 | `_render_asset_trend()`에 2년 선형 예측 추가. 최근 2년치 회귀 기울기 사용, 시작점을 실제 최신 순자산으로 고정, 오늘부터 24개월 외삽 |
+| Step 6: Burn-rate 버그 수정 | `past_daily_pattern` 계산에서 `.mean()` → `.sum().div(n_months)` 로 수정 (지출 있는 달만 분모로 쓰던 과대 추정 문제 해결) |
+| 전체 페이지 헤더 스타일 | 보라 그라디언트 → 검정(`#000000`), 상단 padding `2rem` → `1rem` (모든 pages/*.py, chatbot.py) |
+| 이동평균 툴팁 정수화 | `ma3` `.round().astype('Int64')`, 예측값 `np.round().astype(int)` |
+| Step 5~7: analysis.py 구현 | `_render_anomaly()`, `_render_burnrate()`, `_fill_combined_trend()`, `_render_asset_trend()` 신규 구현 |
 | Step 4: 카테고리 매핑 | STANDARD_CATEGORIES 정의, map_categories() GPT 매핑, 검수 UI (st.data_editor 드롭다운), refined_category_1 저장 |
 | Step 4: upload.py | 3단계 플로우 (파일선택→GPT검수→저장), _parse_batch_only, _build_mapping_df, _apply_mapping_and_save 분리 |
 | Step 3: 업로드 | ZIP+Excel 멀티포맷, docs/ 폴더 자동처리, 파일명 날짜 추출, 스마트 날짜 범위 |
-| Step 3: upload.py | 배치 처리 결과 세션 유지, 처리 후 파일 업로더 초기화, 결과 테이블(파일명/소유자/처리기간/처리결과) |
 | Step 2: 예산 | budgets 테이블, category_rules 통합 제거, sync_categories_from_transactions() |
 | Step 1: 인증 | streamlit-authenticator 로그인, admin/user 역할, 승인 대기 계정 관리 |
 | 챗봇 아키텍처 | 하드코딩 컨텍스트 주입 → GPT Function Calling으로 전환 |
-| 사이드바 CSS | 다크모드 대응 + Primary 버튼 스코프 분리 (`[data-testid="stSidebar"]`) |
 
 ## 알려진 이슈
 
 - `upload.py`에 ZIP 비밀번호 하드코딩 (형준=0979, 윤희=1223)
 - `transactions.py`에 owner 보정 로직 하드코딩 (`Mega/페이코` → 윤희)
-- `transactions` 스키마에 `refined_category_1/2` 컬럼 정의되어 있으나 저장·활용 미구현 (Step 4에서 구현 예정)
-- `plotly`는 requirements에 있으나 미사용 (Step 6~9에서 활용 예정)
+- `transactions` 스키마에 `refined_category_2` 컬럼 정의되어 있으나 미활용
+- Step 7 자산 트렌드: 현재 선형 회귀(numpy) MVP. 데이터 마이그레이션 후 Prophet으로 교체 예정
 
 ---
 
@@ -344,22 +350,21 @@ budgets (
 
 ---
 
-### Step 7 — 자산 트렌드 분석 (Prophet)
+### ✅ Step 7 — 자산 트렌드 분석
 
-**목표:** 누적 자산 스냅샷 데이터로 향후 1년 자산 성장 추세를 예측한다.
+**목표:** 누적 자산 스냅샷 데이터로 자산 성장 추세를 시각화하고 향후 2년을 예측한다.
 
-**구현 범위**
-- `asset_snapshots` 누적 데이터 기반 향후 1년 자산 성장 트렌드 시각화
-- 신뢰 구간(Upper/Lower Bound) 포함 Plotly 시계열 그래프
+**구현 현황 (MVP 완성)**
+- 소유자별/전체 합산 순자산 추이 차트 (실제값 + 3개월 이동평균)
+- 2년 선형 예측: 최근 2년치 데이터로 회귀 기울기 계산 → 오늘부터 24개월 외삽
+  - 시작점 = 실제 최신 순자산값 고정 (절편 버리고 기울기만 사용)
+  - 스냅샷 3개 이상일 때만 예측선 표시
 
-**기술 검토**
-- **마이그레이션 이후 Prophet 직접 적용 가능:** 4년(48개월)치 데이터는 Prophet의 계절성 감지(최소 2주기, 24개월)를 충족. 마이그레이션 완료 후 MVP 없이 바로 Prophet 도입 가능
-- **마이그레이션 전 단계적 전략 (마이그레이션 대기 중일 경우):**
-  - MVP: Plotly 이동평균(Rolling Mean, 3개월) + 선형 추세선으로 먼저 구현 (추가 의존성 없음)
-  - 마이그레이션 완료 후 Prophet으로 교체
-- **Prophet 의존성:** `prophet` 패키지 requirements.txt에 없음 → 추가 필요. 내부적으로 `pystan`을 사용하여 Docker 빌드 시 N100 환경에서 20~40분 컴파일 소요 예상 → 이미지 재빌드 시간 감안하여 일정 계획
+**Prophet 고도화 (마이그레이션 후)**
+- 4년치 데이터 확보 후 `prophet` 패키지로 교체
+- N100 환경에서 pystan 컴파일 20~40분 소요 → Docker 이미지 재빌드 일정 고려
 
-**수정 대상 파일:** `src/pages/analysis.py`, `requirements.txt` (`prophet` 추가)
+**관련 함수:** `_render_asset_trend()`, `_fill_combined_trend()`, `get_asset_history()`
 
 ---
 
@@ -407,20 +412,18 @@ budgets (
 [✅완료] Step 1: 로그인/인증
 [✅완료] Step 2: 목표 예산 설정
 [✅완료] Step 3: 멀티 포맷 업로더 + 파일명 날짜 자동 감지
-
-Step 4 → GPT 카테고리 자동 매핑      ← 다음 단계
+[✅완료] Step 4: GPT 카테고리 자동 매핑
+[✅완료] Step 5: 이상 지출 탐지
+[✅완료] Step 6: Burn-rate 분석
+[✅완료] Step 7: 자산 트렌드 MVP (선형 회귀, Prophet은 마이그레이션 후)
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   [ 데이터 마이그레이션: 22~25년 4년치 일괄 업로드 ]
     → Step 5~7 분석 기능의 신뢰도 확보
-    → Prophet(Step 7) 바로 적용 가능 조건 충족
+    → Prophet(Step 7) 교체 조건 충족
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Step 5 → 이상 지출 탐지        ← 마이그레이션 후 신뢰도 ↑
-Step 6 → Burn-rate 분석        ← Step 2 예산 완료 후
-Step 7 → 자산 트렌드 (Prophet) ← 마이그레이션 후 바로 Prophet 적용
-
-Step 8 → NL-to-SQL 멀티턴 고도화
+Step 8 → NL-to-SQL 멀티턴 고도화    ← 다음 단계
 Step 9 → 동적 시각화 (Tool 방식)
 ```
 

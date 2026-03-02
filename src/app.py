@@ -153,7 +153,7 @@ with st.sidebar:
 
     # 관리자 전용: 데이터 관리 메뉴 (로그아웃 버튼 바로 위)
     if _role == 'admin':
-        _data_mgmt_label = "📂 데이터 관리"
+        _data_mgmt_label = "📂 데이터 관리 (ETL/EDA)"
         if st.button(
             _data_mgmt_label,
             key=f"menu_{_data_mgmt_label}",

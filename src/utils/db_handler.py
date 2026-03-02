@@ -165,7 +165,7 @@ def get_analyzed_transactions():
             T.date,
             T.time,
             T.tx_type,
-            T.category_1,
+            COALESCE(NULLIF(T.refined_category_1, ''), T.category_1) AS category_1,
             T.description,
             T.amount,
             T.memo,
@@ -173,7 +173,7 @@ def get_analyzed_transactions():
             T.source,
             CASE WHEN B.is_fixed_cost = 1 THEN '고정 지출' ELSE '변동 지출' END AS expense_type
         FROM transactions T
-        LEFT JOIN budgets B ON T.category_1 = B.category
+        LEFT JOIN budgets B ON COALESCE(NULLIF(T.refined_category_1, ''), T.category_1) = B.category
         WHERE T.tx_type != '이체'
         ORDER BY T.date DESC, T.time DESC
         '''
@@ -393,12 +393,12 @@ def sync_categories_from_transactions():
     with sqlite3.connect(db_path_fixed) as conn:
         conn.execute("""
             INSERT OR IGNORE INTO budgets (category, monthly_amount, is_fixed_cost, sort_order)
-            SELECT DISTINCT category_1, 0, 0, 0
+            SELECT DISTINCT COALESCE(NULLIF(refined_category_1, ''), category_1), 0, 0, 0
             FROM transactions
             WHERE owner = '형준'
               AND tx_type = '지출'
-              AND category_1 IS NOT NULL
-              AND category_1 NOT IN (SELECT category FROM budgets)
+              AND COALESCE(NULLIF(refined_category_1, ''), category_1) IS NOT NULL
+              AND COALESCE(NULLIF(refined_category_1, ''), category_1) NOT IN (SELECT category FROM budgets)
         """)
         conn.commit()
 
@@ -460,14 +460,14 @@ def get_category_avg_monthly(months: int = 12) -> pd.DataFrame:
 
     query = """
         SELECT
-            category_1,
+            COALESCE(NULLIF(refined_category_1, ''), category_1) AS category_1,
             ROUND(
                 SUM(amount) * 1.0 / COUNT(DISTINCT strftime('%Y-%m', date))
             ) AS avg_monthly
         FROM transactions
         WHERE tx_type = '지출'
           AND date >= date('now', ?)
-        GROUP BY category_1
+        GROUP BY COALESCE(NULLIF(refined_category_1, ''), category_1)
     """
     param = f'-{months} months'
 
@@ -547,6 +547,35 @@ def update_refined_categories(mapping: dict, start_date: str, end_date: str) -> 
             total += cursor.rowcount
         conn.commit()
     return total
+
+
+def get_asset_history() -> pd.DataFrame:
+    """
+    전체 자산 스냅샷 이력을 snapshot_date × owner 기준으로 집계합니다.
+    부채는 DB에 양수로 저장되므로 net_worth 계산 시 차감합니다.
+    Returns: DataFrame with [snapshot_date, owner, total_asset, total_debt, net_worth]
+    """
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    db_path_fixed = os.path.join(base_dir, '../../data/inasset_v1.db')
+
+    if not os.path.exists(db_path_fixed):
+        return pd.DataFrame(columns=['snapshot_date', 'owner', 'total_asset', 'total_debt', 'net_worth'])
+
+    query = """
+        SELECT
+            snapshot_date,
+            owner,
+            SUM(CASE WHEN balance_type = '자산' THEN amount ELSE 0 END) AS total_asset,
+            SUM(CASE WHEN balance_type = '부채' THEN amount ELSE 0 END) AS total_debt,
+            SUM(CASE WHEN balance_type = '자산' THEN amount
+                     WHEN balance_type = '부채' THEN -amount
+                     ELSE 0 END) AS net_worth
+        FROM asset_snapshots
+        GROUP BY snapshot_date, owner
+        ORDER BY snapshot_date ASC
+    """
+    with sqlite3.connect(db_path_fixed) as conn:
+        return pd.read_sql_query(query, conn)
 
 
 def execute_query_safe(sql: str, max_rows: int = 200) -> str:
