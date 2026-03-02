@@ -149,13 +149,16 @@ restart: always
 - ✅ Step 1: 로그인 및 보안 강화 (streamlit-authenticator, admin/user 역할, 승인 대기 관리)
 - ✅ Step 2: 목표 예산 설정 (budgets 테이블, budget.py, 카테고리 자동 동기화)
 - ✅ Step 3: 멀티 포맷 업로더 + 파일명 날짜 자동 감지 (Excel 직접 업로드, docs/ 자동처리, 스마트 날짜 범위)
+- ✅ Step 4: GPT 카테고리 자동 매핑 (map_categories, STANDARD_CATEGORIES, 검수 UI)
 - 🟡 미완성: 분석 리포트 (`analysis.py`는 stub — 헤더만 있음)
-- ❌ 미구현: GPT 카테고리 자동 매핑(Step 4), 이상 지출 탐지(Step 5), Burn-rate(Step 6), 자산 트렌드 Prophet(Step 7)
+- ❌ 미구현: 이상 지출 탐지(Step 5), Burn-rate(Step 6), 자산 트렌드 Prophet(Step 7)
 
 ### 최근 주요 변경 이력
 
 | 항목 | 변경 내용 |
 |------|----------|
+| Step 4: 카테고리 매핑 | STANDARD_CATEGORIES 정의, map_categories() GPT 매핑, 검수 UI (st.data_editor 드롭다운), refined_category_1 저장 |
+| Step 4: upload.py | 3단계 플로우 (파일선택→GPT검수→저장), _parse_batch_only, _build_mapping_df, _apply_mapping_and_save 분리 |
 | Step 3: 업로드 | ZIP+Excel 멀티포맷, docs/ 폴더 자동처리, 파일명 날짜 추출, 스마트 날짜 범위 |
 | Step 3: upload.py | 배치 처리 결과 세션 유지, 처리 후 파일 업로더 초기화, 결과 테이블(파일명/소유자/처리기간/처리결과) |
 | Step 2: 예산 | budgets 테이블, category_rules 통합 제거, sync_categories_from_transactions() |
@@ -270,13 +273,13 @@ budgets (
 
 **구현 범위**
 - 업로드된 거래내역의 `(category_1, description)` 조합을 GPT에 전달하여 `refined_category_1` 자동 매핑
-- **분류 기준:** DB에 저장된 형준의 최근 1개월 `(description → category_1)` 실제 분류 패턴을 few-shot 예시로 GPT 프롬프트에 주입
+- **분류 기준:** DB에 저장된 형준의 최근 3개월 `(description → category_1)` 실제 분류 패턴을 few-shot 예시로 GPT 프롬프트에 주입
 - Human-in-the-loop 검수 UI: `st.data_editor`로 매핑 결과 확인·수정 후 저장
 
 **기술 검토**
 - **ML 분류기 대신 GPT few-shot 방식 채택:** 데이터 규모로는 scikit-learn 분류기 훈련에 필요한 레이블 데이터가 부족함. GPT few-shot in-context learning이 현실적이고 정확도도 높음
-- **구현 방식:** `SELECT DISTINCT description, category_1 FROM transactions WHERE owner='형준' AND date >= (최근 1개월)` → GPT 시스템 프롬프트에 few-shot 주입 → 신규 데이터의 `description` 배치 전송 → `refined_category_1` 매핑 딕셔너리 반환
-- **비용 최적화:** 고유 `(category_1, description)` 조합만 추출하여 GPT에 전송 (중복 제거). 100건 업로드 시 실제 고유값은 20~30개 수준으로 GPT 호출 1~2회면 충분
+- **구현 방식:** `SELECT DISTINCT description, category_1 FROM transactions WHERE owner='형준' AND date >= (최근 3개월)` → GPT 시스템 프롬프트에 few-shot 주입 → 신규 데이터의 `description` 배치 전송 → `refined_category_1` 매핑 딕셔너리 반환
+- **비용 최적화:** 고유 `(category_1, description)` 조합만 추출하여 GPT에 전송 (중복 제거). 100건 업로드 시 실제 고유값은 20~30개 수준으로 GPT 호출 1~2회면 충분 (토큰 사용량 검증 로직 필요)
 - **현재 문제:** `save_transactions()`의 `valid_columns` 리스트에 `refined_category_1`이 없어 저장 불가 → `db_handler.py` 수정 필요
 - 업로드 플로우(업로드 → 파싱 → **카테고리 검수** → 저장)로 단계 추가 — `upload.py` 세션 상태 흐름 재설계 필요
 - `langchain-community` 의존성 불필요 — `openai` SDK만으로 구현 가능, 제거 권장
@@ -297,6 +300,7 @@ budgets (
 
 **기술적 고려사항**
 - 4년치 거래내역 업로드 시 `save_transactions()`의 날짜 범위 삭제-재삽입 로직이 연도별로 정확히 동작하는지 사전 검증 필요
+- 운영 중에 기존 입력된 데이터들도 업데이트가 필요할 수 있기 때문에, 기존 데이터들도 업데이트하는 화면을 구성 필요
 - `asset_snapshots`는 APPEND only이므로 중복 스냅샷 업로드 주의 — 동일 날짜 스냅샷 중복 여부 체크 로직 검토
 - 마이그레이션 완료 후 Step 7(자산 트렌드)에서 **Prophet 바로 적용 가능** (4년 = 48개월치 데이터 확보)
 

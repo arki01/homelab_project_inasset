@@ -5,8 +5,22 @@ from dateutil.relativedelta import relativedelta
 from utils.db_handler import get_analyzed_transactions
 
 def render():
-    st.header("📊 수입/지출 현황")
-    st.caption("표준화된 카테고리로 정리된 상세 내역입니다.")
+    st.markdown("""
+        <style>
+        .page-header {
+            text-align: center; padding: 2rem 0 0.5rem;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+            background-clip: text; font-size: 2.5rem; font-weight: 700;
+        }
+        .page-subtitle {
+            text-align: center; color: var(--text-color);
+            opacity: 0.7; font-size: 1rem; margin-bottom: 2rem;
+        }
+        </style>
+    """, unsafe_allow_html=True)
+    st.markdown('<div class="page-header">수입/지출 현황</div>', unsafe_allow_html=True)
+    st.markdown('<div class="page-subtitle">표준화된 카테고리로 정리된 상세 내역입니다.</div>', unsafe_allow_html=True)
 
     df_analyzed = get_analyzed_transactions()
 

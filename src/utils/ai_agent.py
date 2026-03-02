@@ -1,6 +1,15 @@
 import json
 from datetime import date
+import pandas as pd
 from openai import OpenAI
+
+STANDARD_CATEGORIES = [
+    '식비', '교통비', '고정비', '주거비', '금융', '보험',
+    '생활비', '활동비', '친목비', '꾸밈비', '차량비', '여행비',
+    '의료비', '기여비', '양육비', '예비비', '미분류',
+]
+
+INCOME_CATEGORIES = ['근로소득', '투자소득', '추가수입', '캐쉬백/포인트', '미분류']
 
 DB_SCHEMA = """
 [DB 스키마 — SQLite]
@@ -54,6 +63,97 @@ _TOOLS = [
         }
     }
 ]
+
+
+def map_categories(
+    client: OpenAI,
+    pairs_df: pd.DataFrame,
+    few_shot_df: pd.DataFrame,
+    categories: list = None,
+) -> pd.DataFrame:
+    """
+    거래 내역의 (description, category_1) 조합을 GPT로 refined_category_1에 매핑합니다.
+
+    Args:
+        client      : OpenAI 클라이언트
+        pairs_df    : 고유 (description, category_1) 쌍 DataFrame
+        few_shot_df : few-shot 예시 DataFrame (description, category_1 컬럼)
+        categories  : 사용할 표준 카테고리 리스트 (None이면 STANDARD_CATEGORIES 사용)
+
+    Returns:
+        pairs_df에 refined_category_1 컬럼이 추가된 DataFrame
+    """
+    cats = categories if categories is not None else STANDARD_CATEGORIES
+
+    _zero_usage = {'model': 'gpt-4o', 'input_tokens': 0, 'output_tokens': 0}
+
+    result_df = pairs_df.copy()
+    result_df['refined_category_1'] = result_df['category_1']  # 기본값: 원본 카테고리
+
+    if pairs_df.empty:
+        return result_df, _zero_usage
+
+    few_shot_text = "기존 데이터 없음"
+    if not few_shot_df.empty:
+        lines = [
+            f"  - {row['description']} → {row['category_1']}"
+            for _, row in few_shot_df.head(50).iterrows()
+        ]
+        few_shot_text = "\n".join(lines)
+
+    items_lines = [
+        f"{i + 1}. description=\"{row['description']}\", category_1=\"{row['category_1']}\""
+        for i, (_, row) in enumerate(pairs_df.iterrows())
+    ]
+    items_text = "\n".join(items_lines)
+    categories_str = ', '.join(cats)
+
+    prompt = f"""가계부 카테고리 분류 전문가로서 아래 거래 내역의 refined_category_1을 결정해줘.
+
+## 기존 분류 패턴 (few-shot 예시)
+{few_shot_text}
+
+## 표준 카테고리
+{categories_str}
+
+## 분류할 항목
+{items_text}
+
+## 응답 형식
+JSON 형식으로만 응답해:
+{{"mappings": [
+  {{"index": 1, "refined_category_1": "식비"}},
+  {{"index": 2, "refined_category_1": "교통비"}}
+]}}
+
+분류 규칙:
+- category_1이 표준 카테고리와 일치하면 그대로 사용
+- 표준 카테고리에 없거나 애매하면 description을 참고해 가장 적합한 카테고리로 분류
+- 어느 카테고리도 맞지 않으면 '미분류' 사용"""
+
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": prompt}],
+            response_format={"type": "json_object"},
+        )
+        data = json.loads(response.choices[0].message.content)
+        for item in data.get("mappings", []):
+            idx = item.get("index", 0) - 1
+            if 0 <= idx < len(result_df):
+                refined = item.get("refined_category_1", "")
+                if refined in cats:
+                    result_df.at[result_df.index[idx], "refined_category_1"] = refined
+        usage = response.usage
+        usage_dict = {
+            'model': response.model,
+            'input_tokens': usage.prompt_tokens,
+            'output_tokens': usage.completion_tokens,
+        }
+    except Exception:
+        usage_dict = _zero_usage  # 오류 시 기본값(category_1) 유지
+
+    return result_df, usage_dict
 
 
 def ask_gpt_finance(client: OpenAI, chat_history: list) -> str:

@@ -4,8 +4,22 @@ from utils.db_handler import get_budgets, save_budgets, get_category_avg_monthly
 
 
 def render():
-    st.header("🎯 목표 예산")
-    st.caption("카테고리별 월 목표 예산을 설정합니다. 월 예산 수정 후 **[업데이트]** 버튼을 눌러주세요.")
+    st.markdown("""
+        <style>
+        .page-header {
+            text-align: center; padding: 2rem 0 0.5rem;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+            background-clip: text; font-size: 2.5rem; font-weight: 700;
+        }
+        .page-subtitle {
+            text-align: center; color: var(--text-color);
+            opacity: 0.7; font-size: 1rem; margin-bottom: 2rem;
+        }
+        </style>
+    """, unsafe_allow_html=True)
+    st.markdown('<div class="page-header">목표 예산</div>', unsafe_allow_html=True)
+    st.markdown('<div class="page-subtitle">카테고리별 월 목표 예산을 설정합니다. 월 예산 수정 후 [업데이트] 버튼을 눌러주세요.</div>', unsafe_allow_html=True)
 
     if st.session_state.pop('budget_saved', False):
         st.success("목표 예산이 업데이트 되었습니다.")

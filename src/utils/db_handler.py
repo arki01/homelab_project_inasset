@@ -124,7 +124,7 @@ def save_transactions(df, owner=None, filename="unknown.xlsx"):
         rename_df['time'] = '00:00:00'
 
     # 4. DB에 저장할 최종 컬럼 리스트 정의
-    valid_columns = list(mapping.values()) + ['owner']
+    valid_columns = list(mapping.values()) + ['owner', 'refined_category_1']
 
     # 5. 데이터프레임에 해당 컬럼들이 있는지 확인 후 필터링
     # (혹시라도 매핑되지 않은 컬럼이 있을 경우를 대비해 존재하는 것만 추림)
@@ -475,6 +475,78 @@ def get_category_avg_monthly(months: int = 12) -> pd.DataFrame:
         df = pd.read_sql_query(query, conn, params=(param,))
 
     return df
+
+
+def get_few_shot_examples(months: int = 3, tx_type: str = '지출') -> pd.DataFrame:
+    """형준의 최근 N개월 (description, category_1) 패턴을 few-shot 예시로 반환합니다."""
+    if not os.path.exists(DB_PATH):
+        return pd.DataFrame(columns=['description', 'category_1'])
+    param = f'-{months} months'
+    query = """
+        SELECT DISTINCT description, category_1
+        FROM transactions
+        WHERE owner = '형준'
+          AND tx_type = ?
+          AND date >= date('now', ?)
+          AND description IS NOT NULL
+          AND category_1 IS NOT NULL
+        ORDER BY description
+    """
+    with sqlite3.connect(DB_PATH) as conn:
+        return pd.read_sql_query(query, conn, params=(tx_type, param))
+
+
+def get_transactions_for_reclassification(start_date: str, end_date: str) -> pd.DataFrame:
+    """
+    지정 기간 내 고유 description별 (category_1, refined_category_1, 건수)를 반환합니다.
+    카테고리 재분류 UI의 입력 데이터로 사용됩니다.
+    """
+    if not os.path.exists(DB_PATH):
+        return pd.DataFrame()
+    query = """
+        SELECT
+            description,
+            MIN(category_1)                             AS category_1,
+            MIN(tx_type)                                AS tx_type,
+            MAX(COALESCE(refined_category_1, ''))       AS current_refined,
+            COUNT(*)                                    AS tx_count
+        FROM transactions
+        WHERE date >= ? AND date <= ?
+          AND tx_type != '이체'
+          AND description IS NOT NULL
+        GROUP BY description
+        ORDER BY category_1, description
+    """
+    with sqlite3.connect(DB_PATH) as conn:
+        return pd.read_sql_query(query, conn, params=(start_date, end_date))
+
+
+def update_refined_categories(mapping: dict, start_date: str, end_date: str) -> int:
+    """
+    지정 기간 내 transactions.refined_category_1을 description 기준으로 일괄 업데이트합니다.
+
+    Args:
+        mapping    : {description: refined_category_1} 딕셔너리
+        start_date : 업데이트 대상 시작일 (YYYY-MM-DD)
+        end_date   : 업데이트 대상 종료일 (YYYY-MM-DD)
+
+    Returns:
+        업데이트된 총 행 수
+    """
+    if not os.path.exists(DB_PATH) or not mapping:
+        return 0
+    total = 0
+    with sqlite3.connect(DB_PATH) as conn:
+        for description, refined_cat in mapping.items():
+            cursor = conn.execute(
+                """UPDATE transactions
+                   SET refined_category_1 = ?
+                   WHERE description = ? AND date >= ? AND date <= ?""",
+                (refined_cat, description, start_date, end_date),
+            )
+            total += cursor.rowcount
+        conn.commit()
+    return total
 
 
 def execute_query_safe(sql: str, max_rows: int = 200) -> str:

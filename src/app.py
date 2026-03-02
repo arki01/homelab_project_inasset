@@ -8,7 +8,7 @@ from yaml.loader import SafeLoader
 import streamlit_authenticator as stauth
 
 from utils.db_handler import _init_db
-from pages import upload, assets, transactions, analysis, chatbot, login, budget
+from pages import data_management, assets, transactions, analysis, chatbot, login, budget
 
 # 1. 페이지 설정 (반드시 첫 번째)
 st.set_page_config(page_title="InAsset", layout="wide", page_icon="🏛️")
@@ -129,7 +129,6 @@ with st.sidebar:
         "🏦 자산 현황",
         "📊 분석 리포트",
         "🤖 컨설턴트 챗봇",
-        "📂 데이터 업로드",
     ]
     for label in menu_options:
         if st.button(
@@ -151,6 +150,19 @@ with st.sidebar:
         f"👤 {_name} ({_role_label})</p>",
         unsafe_allow_html=True,
     )
+
+    # 관리자 전용: 데이터 관리 메뉴 (로그아웃 버튼 바로 위)
+    if _role == 'admin':
+        _data_mgmt_label = "📂 데이터 관리"
+        if st.button(
+            _data_mgmt_label,
+            key=f"menu_{_data_mgmt_label}",
+            use_container_width=True,
+            type="primary" if st.session_state.menu == _data_mgmt_label else "secondary",
+        ):
+            st.session_state.menu = _data_mgmt_label
+            st.rerun()
+
     if st.button("로그아웃", use_container_width=True):
         try:
             _authenticator.cookie_controller.delete_cookie()
@@ -196,5 +208,5 @@ elif "분석 리포트" in current_menu:
     analysis.render()
 elif "챗봇" in current_menu:
     chatbot.render()
-elif "업로드" in current_menu:
-    upload.render()
+elif "데이터 관리" in current_menu:
+    data_management.render()

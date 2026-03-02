@@ -4,8 +4,22 @@ from datetime import datetime, timedelta
 from utils.db_handler import get_latest_assets, get_previous_assets
 
 def render():
-    st.header("📈 자산 현황")
-    st.caption("현재 자산 분포와 약 한 달 전 대비 흐름을 확인합니다.")
+    st.markdown("""
+        <style>
+        .page-header {
+            text-align: center; padding: 2rem 0 0.5rem;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+            background-clip: text; font-size: 2.5rem; font-weight: 700;
+        }
+        .page-subtitle {
+            text-align: center; color: var(--text-color);
+            opacity: 0.7; font-size: 1rem; margin-bottom: 2rem;
+        }
+        </style>
+    """, unsafe_allow_html=True)
+    st.markdown('<div class="page-header">자산 현황</div>', unsafe_allow_html=True)
+    st.markdown('<div class="page-subtitle">현재 자산 분포와 약 한 달 전 대비 흐름을 확인합니다.</div>', unsafe_allow_html=True)
 
     # 1. 데이터 로드
     df_assets = get_latest_assets()
