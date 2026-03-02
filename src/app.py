@@ -23,6 +23,9 @@ st.markdown("""
     /* 사이드바 상단 기본 메뉴 숨기기 */
     [data-testid="stSidebarNav"] { display: none; }
 
+    /* 페이지 상단 여백 축소 */
+    .block-container { padding-top: 1.5rem !important; }
+
     /* 사이드바 메뉴 버튼 */
     [data-testid="stSidebar"] .stButton > button {
         width: 100%;
@@ -114,23 +117,26 @@ st.session_state['role'] = _role
 
 # 8. 세션 상태 초기화
 if 'menu' not in st.session_state:
-    st.session_state.menu = "🎯 목표 예산"
+    st.session_state.menu = "📊 분석 리포트"
 
 # 9. 사이드바 구성
 with st.sidebar:
-    st.markdown("<h1 style='text-align: center; color: #2575fc;'>🏛️ InAsset</h1>", unsafe_allow_html=True)
-    st.markdown("<p style='text-align: center; font-size: 0.8rem; opacity: 0.7;'>우리 부부의 스마트 자산 관리자</p>", unsafe_allow_html=True)
+    st.markdown("<h1 style='text-align: center; color: #2575fc; font-size: 2rem;'>🏛️ InAsset</h1>", unsafe_allow_html=True)
+    st.markdown("<p style='text-align: center; font-size: 1rem; opacity: 0.7;'>우리 부부의 스마트 자산 관리자</p>", unsafe_allow_html=True)
     st.markdown("---")
 
-    # 메뉴 구성
-    menu_options = [
-        "🎯 목표 예산",
-        "💰 수입/지출 현황",
-        "🏦 자산 현황",
-        "📊 분석 리포트",
-        "🤖 컨설턴트 챗봇",
-    ]
-    for label in menu_options:
+    # 메뉴 구성 — 상단: 분석/챗봇, 하단: 관리 메뉴
+    for label in ["📊 분석 리포트", "🤖 컨설턴트 챗봇"]:
+        if st.button(
+            label,
+            key=f"menu_{label}",
+            use_container_width=True,
+            type="primary" if st.session_state.menu == label else "secondary",
+        ):
+            st.session_state.menu = label
+            st.rerun()
+
+    for label in ["🎯 목표 예산", "💰 수입/지출 현황", "🏦 자산 현황"]:
         if st.button(
             label,
             key=f"menu_{label}",
