@@ -208,5 +208,5 @@ elif "분석 리포트" in current_menu:
     analysis.render()
 elif "챗봇" in current_menu:
     chatbot.render()
-elif "데이터 관리" in current_menu:
+elif "데이터 관리 (ETL/EDA)" in current_menu:
     data_management.render()

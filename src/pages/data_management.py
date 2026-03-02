@@ -416,7 +416,7 @@ def render():
         }
         </style>
     """, unsafe_allow_html=True)
-    st.markdown('<div class="page-header">데이터 관리</div>', unsafe_allow_html=True)
+    st.markdown('<div class="page-header">데이터 관리 (ETL/EDA)</div>', unsafe_allow_html=True)
     st.markdown('<div class="page-subtitle">가계부 데이터 업로드 및 카테고리 관리</div>', unsafe_allow_html=True)
 
     api_key = os.getenv("OPENAI_API_KEY")
