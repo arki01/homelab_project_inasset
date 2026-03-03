@@ -237,13 +237,13 @@ def _build_mapping_df(client, parsed_data: list) -> tuple:
         return pd.DataFrame(columns=['description', 'category_1', 'refined_category_1']), _empty_usage
 
     all_df = pd.concat(all_pairs)
-    counts = all_df.groupby('description').size().reset_index(name='tx_count')
+    counts = all_df.groupby(['description', 'category_1']).size().reset_index(name='tx_count')
     combined = (
         all_df
-        .drop_duplicates(subset=['description'])
+        .drop_duplicates(subset=['description', 'category_1'])
         .sort_values('category_1')
         .reset_index(drop=True)
-        .merge(counts, on='description', how='left')
+        .merge(counts, on=['description', 'category_1'], how='left')
     )
 
     expense = combined[combined['tx_type'] == '지출'][['description', 'category_1', 'tx_count']].copy()
@@ -294,7 +294,8 @@ def _build_mapping_df(client, parsed_data: list) -> tuple:
 def _apply_mapping_and_save(parsed_data: list, mapping_df: pd.DataFrame) -> list:
     """카테고리 매핑을 적용하고 DB에 저장합니다."""
     mapping_dict = (
-        dict(zip(mapping_df['description'], mapping_df['refined_category_1']))
+        {(row['description'], row['category_1']): row['refined_category_1']
+         for _, row in mapping_df.iterrows()}
         if not mapping_df.empty else {}
     )
 
@@ -316,7 +317,9 @@ def _apply_mapping_and_save(parsed_data: list, mapping_df: pd.DataFrame) -> list
         if tx_df is not None and not tx_df.empty:
             tx_df = tx_df.copy()
             if '내용' in tx_df.columns and '대분류' in tx_df.columns:
-                tx_df['refined_category_1'] = tx_df['내용'].map(mapping_dict).fillna(tx_df['대분류'])
+                tx_df['refined_category_1'] = tx_df.apply(
+                    lambda r: mapping_dict.get((r['내용'], r['대분류']), r['대분류']), axis=1
+                )
             tx_count = save_transactions(tx_df, owner=owner, filename=filename)
 
         asset_count = 0
@@ -392,11 +395,11 @@ def _build_recat_mapping_df(client, tx_df: pd.DataFrame) -> tuple:
 
     all_mapped = pd.concat([expense_mapped, income_mapped], ignore_index=True)
 
-    merge_cols = ['description', 'current_refined', 'tx_count']
+    merge_cols = ['description', 'category_1', 'current_refined', 'tx_count']
     if 'tx_type' in tx_df.columns:
         merge_cols.append('tx_type')
 
-    result = all_mapped.merge(tx_df[merge_cols], on='description', how='left')
+    result = all_mapped.merge(tx_df[merge_cols], on=['description', 'category_1'], how='left')
     result['current_refined'] = result['current_refined'].fillna('')
     return result, total_usage
 
@@ -722,7 +725,10 @@ def render():
         with col1:
             if st.button("검수 완료 & DB 저장", use_container_width=True, key="recat_save_btn"):
                 combined_edited = pd.concat([edited_exp, edited_inc], ignore_index=True)
-                mapping_dict = dict(zip(combined_edited['description'], combined_edited['refined_category_1']))
+                mapping_dict = {
+                    (row['description'], row['category_1']): row['refined_category_1']
+                    for _, row in combined_edited.iterrows()
+                }
                 updated_rows = update_refined_categories(mapping_dict, start_date_str, end_date_str)
                 changed_items = int((combined_edited['refined_category_1'] != combined_edited['current_refined']).sum())
                 st.session_state['recat_results'] = {

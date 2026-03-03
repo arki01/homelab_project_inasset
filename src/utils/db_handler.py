@@ -506,7 +506,7 @@ def get_transactions_for_reclassification(start_date: str, end_date: str) -> pd.
     query = """
         SELECT
             description,
-            MIN(category_1)                             AS category_1,
+            category_1,
             MIN(tx_type)                                AS tx_type,
             MAX(COALESCE(refined_category_1, ''))       AS current_refined,
             COUNT(*)                                    AS tx_count
@@ -514,7 +514,7 @@ def get_transactions_for_reclassification(start_date: str, end_date: str) -> pd.
         WHERE date >= ? AND date <= ?
           AND tx_type != '이체'
           AND description IS NOT NULL
-        GROUP BY description
+        GROUP BY description, category_1
         ORDER BY category_1, description
     """
     with sqlite3.connect(DB_PATH) as conn:
@@ -523,10 +523,10 @@ def get_transactions_for_reclassification(start_date: str, end_date: str) -> pd.
 
 def update_refined_categories(mapping: dict, start_date: str, end_date: str) -> int:
     """
-    지정 기간 내 transactions.refined_category_1을 description 기준으로 일괄 업데이트합니다.
+    지정 기간 내 transactions.refined_category_1을 (description, category_1) 기준으로 일괄 업데이트합니다.
 
     Args:
-        mapping    : {description: refined_category_1} 딕셔너리
+        mapping    : {(description, category_1): refined_category_1} 딕셔너리
         start_date : 업데이트 대상 시작일 (YYYY-MM-DD)
         end_date   : 업데이트 대상 종료일 (YYYY-MM-DD)
 
@@ -537,12 +537,12 @@ def update_refined_categories(mapping: dict, start_date: str, end_date: str) -> 
         return 0
     total = 0
     with sqlite3.connect(DB_PATH) as conn:
-        for description, refined_cat in mapping.items():
+        for (description, category_1), refined_cat in mapping.items():
             cursor = conn.execute(
                 """UPDATE transactions
                    SET refined_category_1 = ?
-                   WHERE description = ? AND date >= ? AND date <= ?""",
-                (refined_cat, description, start_date, end_date),
+                   WHERE description = ? AND category_1 = ? AND date >= ? AND date <= ?""",
+                (refined_cat, description, category_1, start_date, end_date),
             )
             total += cursor.rowcount
         conn.commit()
