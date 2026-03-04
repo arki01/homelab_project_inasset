@@ -15,29 +15,37 @@ DB_SCHEMA = """
 [DB 스키마 — SQLite]
 
 테이블: transactions (거래 내역)
-  - date TEXT        : 날짜 (YYYY-MM-DD)
-  - time TEXT        : 시간 (HH:MM)
-  - tx_type TEXT     : 타입 — 수입 / 지출 / 이체
-  - category_1 TEXT  : 대분류 (식비, 교통비, 고정비, 주거비, 금융, 보험, 생활비, 활동비, 친목비, 꾸밈비, 차량비, 여행비, 의료비, 기여비, 양육비, 예비비, 미분류)
-  - category_2 TEXT  : 소분류
-  - description TEXT : 내용/상호명
-  - amount INTEGER   : 금액 (원 단위)
-  - currency TEXT    : 화폐
-  - source TEXT      : 결제수단
-  - memo TEXT        : 메모
-  - owner TEXT       : 소유자 — 형준 / 윤희 / 공동
+  - date TEXT               : 날짜 (YYYY-MM-DD)
+  - time TEXT               : 시간 (HH:MM)
+  - tx_type TEXT            : 타입 — 수입 / 지출 / 이체
+  - category_1 TEXT         : 원본 대분류 (뱅크샐러드 그대로)
+  - refined_category_1 TEXT : 표준화 대분류 (GPT 재분류값, 없으면 NULL 또는 빈 문자열)
+  - category_2 TEXT         : 소분류
+  - description TEXT        : 내용/상호명
+  - amount INTEGER          : 금액 (원 단위). 지출은 음수(-50000), 수입은 양수(+3000000)로 저장됨
+  - currency TEXT           : 화폐
+  - source TEXT             : 결제수단
+  - memo TEXT               : 메모
+  - owner TEXT              : 소유자 — 형준 / 윤희 / 공동
+
+[중요] 카테고리 조회 규칙:
+  - 카테고리별 집계/필터링 시 항상 아래 표현식을 사용해야 합니다:
+      COALESCE(NULLIF(refined_category_1, ''), category_1)
+  - 예시: WHERE COALESCE(NULLIF(refined_category_1, ''), category_1) = '식비'
+  - 예시: GROUP BY COALESCE(NULLIF(refined_category_1, ''), category_1)
 
 테이블: asset_snapshots (자산 스냅샷)
-  - snapshot_date TEXT : 스냅샷 날짜 (YYYY-MM-DD HH:MM:SS)
+  - snapshot_date TEXT : 스냅샷 날짜 (YYYY-MM-DD)
   - balance_type TEXT  : 구분 — 자산 / 부채
   - asset_type TEXT    : 항목 (현금 자산, 투자성 자산 등)
   - account_name TEXT  : 상품명
-  - amount INTEGER     : 금액 (원 단위, 부채는 음수)
+  - amount INTEGER     : 금액 (원 단위, 부채는 양수로 저장됨)
   - owner TEXT         : 소유자 — 형준 / 윤희 / 공동
 
-테이블: category_rules (고정비/변동비 분류)
-  - category_name TEXT : 대분류명 (transactions.category_1 과 동일)
-  - expense_type TEXT  : 지출 유형 — 고정 지출 / 변동 지출
+테이블: budgets (카테고리별 월 예산)
+  - category       TEXT : 카테고리명 (transactions의 대분류와 동일)
+  - monthly_amount INT  : 월 예산 (원 단위, 0이면 미설정)
+  - is_fixed_cost  INT  : 고정비 여부 — 1=고정 지출 / 0=변동 지출
 """
 
 _TOOLS = [
@@ -156,6 +164,76 @@ JSON 형식으로만 응답해:
     return result_df, usage_dict
 
 
+def generate_analysis_summary(
+    client: OpenAI,
+    anomaly_metrics: dict | None,
+    burnrate_metrics: dict | None,
+) -> str:
+    """
+    이상 지출 및 지출 예측 분석 결과를 바탕으로 친근한 한국어 요약을 생성합니다.
+
+    Args:
+        client           : OpenAI 클라이언트
+        anomaly_metrics  : _compute_anomaly_metrics() 반환값 (None이면 데이터 부족)
+        burnrate_metrics : _compute_burnrate_metrics() 반환값 (None이면 데이터 없음)
+
+    Returns:
+        str: 2~3문장 한국어 요약. 오류 시 빈 문자열 반환.
+    """
+    today_str = date.today().strftime('%Y년 %m월 %d일')
+
+    # 이상 지출 요약 텍스트 구성
+    if anomaly_metrics is None:
+        anomaly_text = "이상 지출 분석 불가 (과거 3개월 이상 데이터 필요)"
+    elif not anomaly_metrics.get("anomalies"):
+        anomaly_text = "이상 지출 없음 — 모든 카테고리 정상 범위"
+    else:
+        lines = []
+        for a in anomaly_metrics["anomalies"]:
+            direction = "초과" if a["direction"] == "over" else "절감"
+            lines.append(f"  - {a['category']}: 평소 대비 {abs(a['pct']):.0f}% {direction} ({a['diff']:+,}원)")
+        anomaly_text = f"이상 지출 감지 ({anomaly_metrics['past_months']}개월 기준):\n" + "\n".join(lines)
+
+    # 지출 예측 요약 텍스트 구성
+    if burnrate_metrics is None:
+        burnrate_text = "지출 예측 불가 (이번 달 지출 데이터 없음)"
+    else:
+        bm = burnrate_metrics
+        budget_str = (
+            f"예산 {bm['budget_total']:,}원 대비 {bm['budget_pct']:.0f}% 소진"
+            if bm["budget_total"] > 0 else "예산 미설정"
+        )
+        exceed_str = "월말 예산 초과 예상" if bm["will_exceed"] else "월말 예산 내 예상"
+        burnrate_text = (
+            f"현재 누적 {bm['current_total']:,}원 ({budget_str}), "
+            f"월말 예상 {bm['projected_total']:,}원 → {exceed_str}"
+        )
+
+    prompt = f"""오늘은 {today_str}입니다.
+아래는 가계부 분석 시스템이 계산한 이번 달 현황입니다:
+
+{anomaly_text}
+
+{burnrate_text}
+
+이 데이터를 바탕으로 분석 리포트 상단에 표시할 친근한 안내 메시지를 2~3문장으로 작성해줘.
+규칙:
+- 친근하고 따뜻한 톤 (딱딱한 보고서 말투 금지)
+- 가장 중요한 내용 1~2가지만 강조, 나머지는 아래 차트 참고 유도
+- 이상 지출이 없고 예산 내이면 긍정적인 메시지
+- 순수 텍스트로만 응답 (마크다운, 이모지 없이)"""
+
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=200,
+        )
+        return response.choices[0].message.content.strip()
+    except Exception:
+        return ""
+
+
 def ask_gpt_finance(client: OpenAI, chat_history: list) -> str:
     """
     Function Calling으로 GPT가 필요한 쿼리를 직접 작성·실행하고 답변을 생성합니다.
@@ -182,7 +260,9 @@ def ask_gpt_finance(client: OpenAI, chat_history: list) -> str:
 - 질문 범위에 딱 맞는 쿼리를 작성해 (불필요한 데이터 로딩 금지)
 - 이체(tx_type='이체')는 항상 WHERE 조건에서 제외해
 - 기간이 명시되지 않으면 이번 달 기준으로 조회해
-- 금액은 원 단위 정수야
+- 금액은 원 단위 정수야. 지출은 음수(-), 수입은 양수(+)로 저장됨
+- 지출 금액 크기 비교·정렬 시 반드시 ABS(amount) 또는 -amount를 사용해
+  예) 가장 큰 지출: ORDER BY ABS(amount) DESC  /  지출 합계: SUM(ABS(amount))
 - 답변은 친근하고 명확하게 한국어로 해줘
 """
 
@@ -191,43 +271,35 @@ def ask_gpt_finance(client: OpenAI, chat_history: list) -> str:
         *chat_history
     ]
 
+    max_iterations = 5  # 무한 루프 방지
     try:
-        # 1차 호출: GPT가 필요한 쿼리 결정
-        response = client.chat.completions.create(
-            model="gpt-4o",
-            messages=messages,
-            tools=_TOOLS,
-            tool_choice="auto"
-        )
+        for _ in range(max_iterations):
+            response = client.chat.completions.create(
+                model="gpt-4o",
+                messages=messages,
+                tools=_TOOLS,
+                tool_choice="auto",
+            )
+            response_message = response.choices[0].message
 
-        response_message = response.choices[0].message
+            # tool_call이 없으면 최종 답변 반환
+            if not response_message.tool_calls:
+                return response_message.content
 
-        # Function Call 없이 바로 답변한 경우 반환
-        if not response_message.tool_calls:
-            return response_message.content
+            # tool_call 실행: 요청된 쿼리를 모두 처리하고 결과를 messages에 추가
+            messages.append(response_message)
+            for tool_call in response_message.tool_calls:
+                if tool_call.function.name == "query_database":
+                    args = json.loads(tool_call.function.arguments)
+                    sql = args.get("sql", "")
+                    query_result = execute_query_safe(sql)
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tool_call.id,
+                        "content": query_result,
+                    })
 
-        # Function Call 루프: 쿼리 실행 후 결과 전달
-        messages.append(response_message)
-
-        for tool_call in response_message.tool_calls:
-            if tool_call.function.name == "query_database":
-                args = json.loads(tool_call.function.arguments)
-                sql = args.get("sql", "")
-                query_result = execute_query_safe(sql)
-
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": tool_call.id,
-                    "content": query_result
-                })
-
-        # 2차 호출: 쿼리 결과를 바탕으로 최종 답변 생성
-        final_response = client.chat.completions.create(
-            model="gpt-4o",
-            messages=messages
-        )
-
-        return final_response.choices[0].message.content
+        return "죄송해요, 데이터 조회가 너무 복잡해서 답변을 완성하지 못했어요. 질문을 조금 더 구체적으로 해주시겠어요?"
 
     except Exception as e:
         return f"AI 응답 중 오류가 발생했습니다: {str(e)}"

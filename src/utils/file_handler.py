@@ -44,7 +44,8 @@ def scan_docs_folder() -> list:
     docs/ 폴더의 ZIP/Excel 파일을 스캔하여 처리 메타데이터 목록을 반환합니다.
 
     Returns:
-        list of dict: {filename, owner, snapshot_date, start_date}
+        list of dict: {filename, owner, snapshot_date, start_date, mtime}
+        mtime: 파일 수정시간 (datetime.datetime, UTC naive)
     """
     if not os.path.exists(DOCS_DIR):
         os.makedirs(DOCS_DIR, exist_ok=True)
@@ -57,11 +58,14 @@ def scan_docs_folder() -> list:
         start_str, snapshot_str = extract_date_range(fname)
         if start_str is None:
             start_str = str(datetime.date.fromisoformat(snapshot_str) - datetime.timedelta(days=30))
+        fpath = os.path.join(DOCS_DIR, fname)
+        mtime = datetime.datetime.fromtimestamp(os.path.getmtime(fpath))
         result.append({
             'filename': fname,
             'owner': detect_owner_from_filename(fname),
             'snapshot_date': snapshot_str,
             'start_date': start_str,
+            'mtime': mtime,
         })
     return result
 

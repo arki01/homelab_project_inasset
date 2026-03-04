@@ -1,12 +1,16 @@
 import calendar
+import hashlib
+import json
+import os
 from datetime import date
 
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+from openai import OpenAI
 
-from utils.ai_agent import STANDARD_CATEGORIES
+from utils.ai_agent import STANDARD_CATEGORIES, generate_analysis_summary
 from utils.db_handler import get_analyzed_transactions, get_asset_history, get_budgets
 
 
@@ -31,6 +35,11 @@ def render():
         st.info("데이터가 없습니다. 먼저 데이터를 업로드해주세요.")
         return
 
+    # 메트릭 계산 → GPT 요약 카드
+    anomaly_metrics = _compute_anomaly_metrics(df_all)
+    burnrate_metrics = _compute_burnrate_metrics(df_all)
+    _render_summary_card(anomaly_metrics, burnrate_metrics)
+
     st.subheader("🚨 이상 지출")
     _render_anomaly(df_all)
 
@@ -43,6 +52,179 @@ def render():
 
     st.subheader("📈 자산 트렌드")
     _render_asset_trend(owner="전체")
+
+
+# ──────────────────────────────────────────────
+# GPT 요약 카드
+# ──────────────────────────────────────────────
+
+def _compute_anomaly_metrics(df_all) -> dict | None:
+    """이상 지출 계산. 데이터 부족(3개월 미만) 시 None 반환."""
+    df = df_all[df_all['tx_type'] == '지출'].copy()
+    if df.empty:
+        return None
+
+    df['amount_abs'] = df['amount'].abs()
+    df['date'] = pd.to_datetime(df['date'])
+    df['year_month'] = df['date'].dt.to_period('M')
+
+    today = date.today()
+    current_period = pd.Period(today, 'M')
+    today_day = today.day
+
+    past_df = df[
+        (df['year_month'] < current_period) &
+        (df['year_month'] >= current_period - 12)
+    ].copy()
+    current_df = df[df['year_month'] == current_period].copy()
+
+    past_months = past_df['year_month'].nunique()
+    if past_months < 3:
+        return None
+
+    past_same_period = past_df[past_df['date'].dt.day <= today_day].copy()
+    past_monthly = (
+        past_same_period.groupby(['year_month', 'category_1'])['amount_abs']
+        .sum().reset_index()
+    )
+    past_stats = (
+        past_monthly.groupby('category_1')['amount_abs']
+        .agg(['mean', 'std']).reset_index()
+    )
+    past_stats.columns = ['category_1', 'mean', 'std']
+
+    if current_df.empty:
+        return {"anomalies": [], "past_months": past_months}
+
+    current_monthly = (
+        current_df.groupby('category_1')['amount_abs']
+        .sum().reset_index()
+        .rename(columns={'amount_abs': 'current_amount'})
+    )
+    merged = current_monthly.merge(past_stats, on='category_1', how='left').dropna(subset=['mean', 'std'])
+    anomalies_df = merged[
+        (merged['std'] > 0) &
+        (abs(merged['current_amount'] - merged['mean']) > 2 * merged['std'])
+    ].copy()
+
+    anomalies = []
+    for _, row in anomalies_df.iterrows():
+        diff = row['current_amount'] - row['mean']
+        pct = (diff / row['mean'] * 100) if row['mean'] > 0 else 0
+        anomalies.append({
+            "category": row['category_1'],
+            "current": int(row['current_amount']),
+            "mean": int(row['mean']),
+            "diff": int(diff),
+            "pct": round(pct, 1),
+            "direction": "over" if diff > 0 else "under",
+        })
+
+    return {"anomalies": anomalies, "past_months": past_months}
+
+
+def _compute_burnrate_metrics(df_all) -> dict | None:
+    """Burn-rate 계산. 이번 달 지출 없으면 None 반환."""
+    today = date.today()
+    first_of_month = today.replace(day=1)
+    days_in_month = calendar.monthrange(today.year, today.month)[1]
+
+    df = df_all.copy()
+    df['date'] = pd.to_datetime(df['date'])
+    df['year_month'] = df['date'].dt.to_period('M')
+    current_period = pd.Period(today, 'M')
+
+    budgets_df = get_budgets()
+    budget_total = int(budgets_df['monthly_amount'].sum()) if not budgets_df.empty else 0
+
+    df_month = df[
+        (df['tx_type'] == '지출') &
+        (df['date'] >= pd.Timestamp(first_of_month)) &
+        (df['date'] <= pd.Timestamp(today))
+    ].copy()
+    df_month['amount_abs'] = df_month['amount'].abs()
+
+    daily = df_month.groupby('date')['amount_abs'].sum().reset_index()
+    date_range = pd.date_range(start=first_of_month, end=today)
+    daily = (
+        daily.set_index('date').reindex(date_range, fill_value=0).reset_index()
+        .rename(columns={'index': 'date', 'amount_abs': 'amount'})
+    )
+    daily['cumulative'] = daily['amount'].cumsum()
+    current_total = int(daily['cumulative'].iloc[-1]) if not daily.empty else 0
+
+    past_12_df = df[
+        (df['tx_type'] == '지출') &
+        (df['year_month'] < current_period) &
+        (df['year_month'] >= current_period - 12)
+    ].copy()
+    past_12_df['amount_abs'] = past_12_df['amount'].abs()
+    past_12_df['day_of_month'] = past_12_df['date'].dt.day
+
+    past_daily_pattern = pd.Series(dtype=float)
+    if not past_12_df.empty:
+        n_months = past_12_df['year_month'].nunique()
+        past_daily_pattern = (
+            past_12_df.groupby(['year_month', 'day_of_month'])['amount_abs']
+            .sum().reset_index()
+            .groupby('day_of_month')['amount_abs']
+            .sum()
+            .div(n_months)
+        )
+
+    remaining_days = range(today.day + 1, days_in_month + 1)
+    projected_total = current_total + int(sum(past_daily_pattern.get(d, 0) for d in remaining_days))
+
+    if current_total == 0 and projected_total == 0:
+        return None
+
+    budget_pct = (current_total / budget_total * 100) if budget_total > 0 else 0
+    will_exceed = (projected_total > budget_total) if budget_total > 0 else False
+
+    return {
+        "current_total": current_total,
+        "projected_total": projected_total,
+        "budget_total": budget_total,
+        "budget_pct": round(budget_pct, 1),
+        "will_exceed": will_exceed,
+    }
+
+
+def _render_summary_card(anomaly_metrics: dict | None, burnrate_metrics: dict | None):
+    """GPT 기반 분석 요약 안내글 카드."""
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        return
+
+    # 데이터 해시 기반 세션 캐시 (같은 데이터 → 재호출 없음)
+    metrics_hash = hashlib.md5(
+        json.dumps([anomaly_metrics, burnrate_metrics], sort_keys=True, default=str).encode()
+    ).hexdigest()[:10]
+    cache_key = f"analysis_summary_{date.today().isoformat()}_{metrics_hash}"
+
+    if cache_key not in st.session_state:
+        with st.spinner("AI 요약 생성 중..."):
+            try:
+                client = OpenAI(api_key=api_key)
+                summary = generate_analysis_summary(client, anomaly_metrics, burnrate_metrics)
+            except Exception:
+                summary = ""
+        st.session_state[cache_key] = summary
+    else:
+        summary = st.session_state[cache_key]
+
+    if summary:
+        st.markdown(f"""
+            <div style="background:var(--background-color);
+                        border-left:4px solid #667eea;
+                        padding:0.9rem 1.2rem;
+                        border-radius:4px;
+                        margin-bottom:1.5rem;
+                        font-size:0.95rem;
+                        line-height:1.75;">
+                🤖 {summary}
+            </div>
+        """, unsafe_allow_html=True)
 
 
 # ──────────────────────────────────────────────

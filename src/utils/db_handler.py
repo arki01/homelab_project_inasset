@@ -242,13 +242,13 @@ def has_transactions_in_range(owner: str, start_date: str, end_date: str) -> boo
         return cursor.fetchone() is not None
 
 
-def get_processed_filenames() -> set:
-    """처리 완료된 파일명 집합을 반환합니다."""
+def get_processed_filenames() -> dict:
+    """처리 완료된 파일명 → processed_at 매핑을 반환합니다."""
     if not os.path.exists(DB_PATH):
-        return set()
+        return {}
     with sqlite3.connect(DB_PATH) as conn:
-        cursor = conn.execute("SELECT filename FROM processed_files")
-        return {row[0] for row in cursor.fetchall()}
+        cursor = conn.execute("SELECT filename, processed_at FROM processed_files")
+        return {row[0]: row[1] for row in cursor.fetchall()}
 
 
 def mark_file_processed(filename: str, owner: str, snapshot_date: str):
