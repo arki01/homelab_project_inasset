@@ -7,7 +7,7 @@ from yaml.loader import SafeLoader
 
 import streamlit_authenticator as stauth
 
-from utils.db_handler import _init_db
+from utils.db_handler import _init_db, get_latest_transaction_date
 from pages import data_management, assets, transactions, analysis, chatbot, login, budget
 
 # 1. 페이지 설정 (반드시 첫 번째)
@@ -123,6 +123,12 @@ if 'menu' not in st.session_state:
 with st.sidebar:
     st.markdown("<h1 style='text-align: center; color: #2575fc; font-size: 2rem;'>🏛️ InAsset</h1>", unsafe_allow_html=True)
     st.markdown("<p style='text-align: center; font-size: 1rem; opacity: 0.7;'>우리 부부의 스마트 자산 관리자</p>", unsafe_allow_html=True)
+    _latest_date = get_latest_transaction_date()
+    if _latest_date:
+        st.markdown(
+            f"<p style='text-align: center; font-size: 0.8rem; opacity: 0.5; margin: 0;'>📅 Updated: {_latest_date}</p>",
+            unsafe_allow_html=True,
+        )
     st.markdown("---")
 
     # 메뉴 구성 — 상단: 분석/챗봇, 하단: 관리 메뉴

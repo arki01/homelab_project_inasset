@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime, timedelta
-from utils.db_handler import get_latest_assets, get_previous_assets
+from datetime import timedelta
+from utils.db_handler import get_previous_assets, get_available_asset_months, get_assets_for_month
 
 def render():
     st.markdown("""
@@ -19,10 +19,27 @@ def render():
     st.markdown('<div class="page-header">자산 현황</div>', unsafe_allow_html=True)
     st.markdown('<div class="page-subtitle">현재 자산 분포와 약 한 달 전 대비 흐름을 확인합니다.</div>', unsafe_allow_html=True)
 
-    # 1. 데이터 로드
-    df_assets = get_latest_assets()
-    if df_assets.empty:
+    # 1. 연/월 선택기
+    months_df = get_available_asset_months()
+    if months_df.empty:
         st.info("기록된 자산 데이터가 없습니다. 먼저 데이터를 업로드해주세요.")
+        return
+
+    available_years = months_df['year'].unique().tolist()  # 이미 내림차순 정렬됨
+
+    _, sel_col1, sel_col2, _ = st.columns([2, 1, 1, 2])
+    with sel_col1:
+        sel_year = st.selectbox("연도", available_years, index=0, key="asset_year")
+
+    available_months = months_df[months_df['year'] == sel_year]['month'].tolist()
+    with sel_col2:
+        sel_month = st.selectbox("월", available_months, index=0, key="asset_month",
+                                 format_func=lambda m: f"{m}월")
+
+    # 2. 선택 연월 데이터 로드
+    df_assets = get_assets_for_month(sel_year, sel_month)
+    if df_assets.empty:
+        st.info(f"{sel_year}년 {sel_month}월 자산 데이터가 없습니다.")
         return
 
     # 전처리: 부채를 음수로 변환

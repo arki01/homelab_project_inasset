@@ -25,25 +25,43 @@ def render():
     if df_analyzed.empty:
         st.info("데이터가 없습니다. 먼저 [1. 가계부 업로드] 메뉴에서 엑셀 파일을 저장해주세요.")
     else:
-        # 1. 날짜 변환 및 기준일 설정
+        # 1. 날짜 변환 및 전처리
         df_analyzed_dt = df_analyzed.copy()
         df_analyzed_dt['date'] = pd.to_datetime(df_analyzed_dt['date'])
-        
+
         # owner 변경 적용
-        mask_yunhee = df_analyzed_dt['source'].str.contains('Mega|페이코', case=False, na=False)                          
+        mask_yunhee = df_analyzed_dt['source'].str.contains('Mega|페이코', case=False, na=False)
         if mask_yunhee.any():
             df_analyzed_dt.loc[mask_yunhee, 'owner'] = '윤희'
 
-        latest_date = df_analyzed_dt['date'].max() # 데이터상 가장 최근 날짜
-        current_day = latest_date.day # 현재 진행된 일수 (예: 15일)
-        
-        # 이번 달 기준 (1일 ~ 최근 날짜)
-        this_month_start = latest_date.replace(day=1)
-        
-        # [변경] 비교 기준: 최근 1년 (이번 달 제외)
+        # 2. 연/월 선택기 (타이틀 바로 아래)
+        available_years = sorted(df_analyzed_dt['date'].dt.year.unique(), reverse=True)
+
+        _, sel_col1, sel_col2, _ = st.columns([2, 1, 1, 2])
+        with sel_col1:
+            sel_year = st.selectbox("연도", available_years, index=0, key="tx_year")
+
+        available_months = sorted(
+            df_analyzed_dt[df_analyzed_dt['date'].dt.year == sel_year]['date'].dt.month.unique(),
+            reverse=True
+        )
+        with sel_col2:
+            sel_month = st.selectbox("월", available_months, index=0, key="tx_month",
+                                     format_func=lambda m: f"{m}월")
+
+        # 3. 선택 연월 기준 날짜 계산
+        this_month_start = datetime(sel_year, sel_month, 1)
+        # 해당 월의 데이터 최대 날짜 (미완성 월이면 실제 최대 날짜, 완료 월이면 말일)
+        month_data = df_analyzed_dt[
+            (df_analyzed_dt['date'].dt.year == sel_year) &
+            (df_analyzed_dt['date'].dt.month == sel_month)
+        ]
+        latest_date = month_data['date'].max() if not month_data.empty else this_month_start
+        current_day = latest_date.day
+
+        # 비교 기준: 선택 월 기준 과거 1년 (선택 월 제외)
         one_year_ago = this_month_start - relativedelta(years=1)
-         
-        st.caption(f"📅 Updated: {latest_date.strftime('%Y-%m-%d')}")
+
         st.subheader("총 내역")
 
         # 탭 설정
@@ -101,29 +119,30 @@ def render():
                     return f"{diff:,.0f}원 ({pct:+.1f}%)"
 
                 # --- [D] UI 렌더링 ---
+                month_label = f"{sel_year}년 {sel_month}월"
                 c1, c2 = st.columns(2)
                 with c1:
                     st.metric(
-                        label="이번 달 총 수입", 
-                        value=f"{cur_income:,.0f}원", 
+                        label=f"{month_label} 총 수입",
+                        value=f"{cur_income:,.0f}원",
                         delta=calc_delta(cur_income, avg_income),
                         help=f"최근 1년 동기간 평균: {avg_income:,.0f}원"
                     )
                     st.metric(
-                        label="이번 달 총 지출", 
-                        value=f"{cur_expense:,.0f}원", 
+                        label=f"{month_label} 총 지출",
+                        value=f"{cur_expense:,.0f}원",
                         delta=calc_delta(cur_expense, avg_expense),
                         help=f"최근 1년 동기간 평균: {avg_expense:,.0f}원"
                     )
                 with c2:
                     st.metric(
-                        label="이번 달 고정 지출", 
+                        label=f"{month_label} 고정 지출",
                         value=f"{cur_fixed:,.0f}원",
                         delta=calc_delta(cur_fixed, avg_fixed),
                         help=f"최근 1년 동기간 평균: {avg_fixed:,.0f}원"
                     )
                     st.metric(
-                        label="이번 달 변동 지출", 
+                        label=f"{month_label} 변동 지출",
                         value=f"{cur_variable:,.0f}원",
                         delta=calc_delta(cur_variable, avg_variable),
                         help=f"최근 1년 동기간 평균: {avg_variable:,.0f}원"
@@ -133,12 +152,12 @@ def render():
                 st.divider()
                 st.subheader("상세 내역 조회")
 
-                # 0. 기간 선택 필터 (새로 추가됨)
-                period_options = ["이번 주", "이번 달", "전체"]
+                # 0. 기간 선택 필터
+                period_options = ["이번 주", "선택 월", "전체"]
                 selected_period = st.radio(
                     "조회 기간",
                     period_options,
-                    index=1, # 기본값: 최근 1개월
+                    index=1, # 기본값: 선택 월
                     horizontal=True,
                     key=f"period_radio_{owner}"
                 )
@@ -198,10 +217,12 @@ def render():
                     
                     filtered_df = filtered_df[filtered_df['date'] >= start_of_week]
 
-                elif selected_period == "이번 달":
-                    # latest_date가 포함된 달의 1일 계산
-                    start_of_month = latest_date.replace(day=1, hour=0, minute=0, second=0)
-                    filtered_df = filtered_df[filtered_df['date'] >= start_of_month]
+                elif selected_period == "선택 월":
+                    start_of_month = datetime(sel_year, sel_month, 1)
+                    filtered_df = filtered_df[
+                        (filtered_df['date'] >= start_of_month) &
+                        (filtered_df['date'] <= latest_date)
+                    ]
 
                 # [Step 2] 카테고리/유형/검색어 필터 적용
                 if selected_tx:

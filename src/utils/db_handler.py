@@ -351,6 +351,76 @@ def get_previous_assets(target_date, owner):
     finally:
         conn.close()
 
+def get_latest_transaction_date() -> str | None:
+    """transactions 테이블에서 가장 최근 날짜를 반환합니다. 데이터 없으면 None."""
+    if not os.path.exists(DB_PATH):
+        return None
+    with sqlite3.connect(DB_PATH) as conn:
+        cursor = conn.execute("SELECT MAX(date) FROM transactions")
+        row = cursor.fetchone()
+        return row[0] if row and row[0] else None
+
+
+def get_available_asset_months() -> pd.DataFrame:
+    """
+    asset_snapshots에 실제 데이터가 존재하는 연/월 목록을 반환합니다.
+    Returns: DataFrame with [year(int), month(int)] — 최신순 정렬
+    """
+    if not os.path.exists(DB_PATH):
+        return pd.DataFrame(columns=['year', 'month'])
+
+    with sqlite3.connect(DB_PATH) as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='asset_snapshots'")
+        if not cursor.fetchone():
+            return pd.DataFrame(columns=['year', 'month'])
+
+        query = """
+            SELECT DISTINCT
+                CAST(strftime('%Y', snapshot_date) AS INTEGER) AS year,
+                CAST(strftime('%m', snapshot_date) AS INTEGER) AS month
+            FROM asset_snapshots
+            ORDER BY year DESC, month DESC
+        """
+        return pd.read_sql_query(query, conn)
+
+
+def get_assets_for_month(year: int, month: int) -> pd.DataFrame:
+    """
+    특정 연/월 내에서 소유자별 가장 마지막 snapshot_date의 자산 데이터를 반환합니다.
+    """
+    if not os.path.exists(DB_PATH):
+        return pd.DataFrame()
+
+    ym = f"{year:04d}-{month:02d}"
+
+    with sqlite3.connect(DB_PATH) as conn:
+        query = """
+        SELECT
+            owner,
+            balance_type,
+            asset_type,
+            account_name,
+            amount,
+            snapshot_date
+        FROM asset_snapshots
+        WHERE (owner, snapshot_date) IN (
+            SELECT owner, snapshot_date FROM (
+                SELECT owner, snapshot_date,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY owner
+                           ORDER BY snapshot_date DESC
+                       ) AS rn
+                FROM asset_snapshots
+                WHERE strftime('%Y-%m', snapshot_date) = ?
+            )
+            WHERE rn = 1
+        )
+        ORDER BY owner DESC, balance_type DESC, amount DESC
+        """
+        return pd.read_sql_query(query, conn, params=(ym,))
+
+
 def init_budgets():
     """
     budgets 테이블이 비어 있을 때 transactions(owner='형준')의 카테고리로 초기화합니다.
