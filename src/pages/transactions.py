@@ -78,14 +78,23 @@ def render():
                 
                 # --- [A] 이번 달 데이터 집계 ---
                 current_df = display_owner_df[
-                    (display_owner_df['date'] >= this_month_start) & 
+                    (display_owner_df['date'] >= this_month_start) &
                     (display_owner_df['date'] <= latest_date)
                 ]
-                
+
+                exclude_key = f"exclude_yebibee_{owner}"
+                exclude_yebibee = st.session_state.get(exclude_key, False)
+
+                _cur_expense_df = current_df[current_df['amount'] < 0]
+                _cur_variable_df = current_df[current_df['expense_type'] == '변동 지출']
+                if exclude_yebibee:
+                    _cur_expense_df = _cur_expense_df[_cur_expense_df['category_1'] != '예비비']
+                    _cur_variable_df = _cur_variable_df[_cur_variable_df['category_1'] != '예비비']
+
                 cur_income = current_df[current_df['amount'] > 0]['amount'].sum()
-                cur_expense = current_df[current_df['amount'] < 0]['amount'].sum()
+                cur_expense = _cur_expense_df['amount'].sum()
                 cur_fixed = current_df[current_df['expense_type'] == '고정 지출']['amount'].sum()
-                cur_variable = current_df[current_df['expense_type'] == '변동 지출']['amount'].sum()
+                cur_variable = _cur_variable_df['amount'].sum()
 
                 # --- [B] 최근 1년 동기간 평균 계산 (핵심 로직 변경) ---
                 # 1. 기간 필터: 1년 전 ~ 이번 달 시작 전까지
@@ -105,10 +114,16 @@ def render():
                     unique_months = 1 # 0으로 나누기 방지
 
                 # 4. 항목별 평균 산출 (총합 / 개월 수)
+                _avg_expense_df = past_year_filtered[past_year_filtered['amount'] < 0]
+                _avg_variable_df = past_year_filtered[past_year_filtered['expense_type'] == '변동 지출']
+                if exclude_yebibee:
+                    _avg_expense_df = _avg_expense_df[_avg_expense_df['category_1'] != '예비비']
+                    _avg_variable_df = _avg_variable_df[_avg_variable_df['category_1'] != '예비비']
+
                 avg_income = past_year_filtered[past_year_filtered['amount'] > 0]['amount'].sum() / unique_months
-                avg_expense = past_year_filtered[past_year_filtered['amount'] < 0]['amount'].sum() / unique_months
+                avg_expense = _avg_expense_df['amount'].sum() / unique_months
                 avg_fixed = past_year_filtered[past_year_filtered['expense_type'] == '고정 지출']['amount'].sum() / unique_months
-                avg_variable = past_year_filtered[past_year_filtered['expense_type'] == '변동 지출']['amount'].sum() / unique_months
+                avg_variable = _avg_variable_df['amount'].sum() / unique_months
 
                 # --- [C] 델타 계산 함수 (기존 유지) ---
                 def calc_delta(current, average):
@@ -147,6 +162,8 @@ def render():
                         delta=calc_delta(cur_variable, avg_variable),
                         help=f"최근 1년 동기간 평균: {avg_variable:,.0f}원"
                     )
+
+                st.checkbox("예비비 제외 (이벤트성 비용)", value=False, key=exclude_key)
 
                 # --- [C] 하단 상세 내역 필터링 및 합계 (새로 추가된 기능) ---
                 st.divider()

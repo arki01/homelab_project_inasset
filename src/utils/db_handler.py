@@ -179,7 +179,11 @@ def get_analyzed_transactions():
             T.memo,
             T.owner,
             T.source,
-            CASE WHEN B.is_fixed_cost = 1 THEN '고정 지출' ELSE '변동 지출' END AS expense_type
+            CASE
+                WHEN T.tx_type != '지출' THEN NULL
+                WHEN B.is_fixed_cost = 1 THEN '고정 지출'
+                ELSE '변동 지출'
+            END AS expense_type
         FROM transactions T
         LEFT JOIN budgets B ON COALESCE(NULLIF(T.refined_category_1, ''), T.category_1) = B.category
         WHERE T.tx_type != '이체'

@@ -470,7 +470,7 @@ def _render_burnrate(df_all):
     fig = go.Figure()
     fig.add_trace(go.Scatter(
         x=daily['date'], y=daily['cumulative'],
-        mode='lines', name='실제 누적 지출',
+        mode='lines', name='현재 누적 지출',
         line=dict(color='#667eea', width=2),
     ))
     if last_month_dates:
