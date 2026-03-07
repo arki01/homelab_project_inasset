@@ -333,7 +333,13 @@ def _render_burnrate(df_all):
     extra_cats = sorted(known_cats - set(STANDARD_CATEGORIES))
     all_categories = ["전체"] + std_cats_available + extra_cats
 
-    selected_cat = st.selectbox("카테고리 선택", all_categories)
+    col_cat, _col2, _col3 = st.columns(3)
+    with col_cat:
+        selected_cat = st.selectbox("카테고리 선택", all_categories)
+
+    exclude_yebibee = False
+    if selected_cat == "전체":
+        exclude_yebibee = st.checkbox("예비비 제외 (이벤트성 비용)", value=True)
 
     # 이번 달 지출 (1일~오늘)
     df_month = df[
@@ -344,6 +350,8 @@ def _render_burnrate(df_all):
     df_month['amount_abs'] = df_month['amount'].abs()
     if selected_cat != "전체":
         df_month = df_month[df_month['category_1'] == selected_cat]
+    elif exclude_yebibee:
+        df_month = df_month[df_month['category_1'] != '예비비']
 
     # 일별 합산 → 누적합
     daily = df_month.groupby('date')['amount_abs'].sum().reset_index()
@@ -365,6 +373,8 @@ def _render_burnrate(df_all):
     past_12_df['day_of_month'] = past_12_df['date'].dt.day
     if selected_cat != "전체":
         past_12_df = past_12_df[past_12_df['category_1'] == selected_cat]
+    elif exclude_yebibee:
+        past_12_df = past_12_df[past_12_df['category_1'] != '예비비']
 
     past_daily_pattern = pd.Series(dtype=float)
     if not past_12_df.empty:
@@ -380,6 +390,31 @@ def _render_burnrate(df_all):
     remaining_days = range(today.day + 1, days_in_month + 1)
     projected_total = current_total + int(sum(past_daily_pattern.get(d, 0) for d in remaining_days))
 
+    # 지난달 실제 지출
+    last_period = current_period - 1
+    last_month_df = df[
+        (df['tx_type'] == '지출') &
+        (df['year_month'] == last_period)
+    ].copy()
+    last_month_df['amount_abs'] = last_month_df['amount'].abs()
+    last_month_df['day_of_month'] = last_month_df['date'].dt.day
+    if selected_cat != "전체":
+        last_month_df = last_month_df[last_month_df['category_1'] == selected_cat]
+    elif exclude_yebibee:
+        last_month_df = last_month_df[last_month_df['category_1'] != '예비비']
+
+    last_month_total = int(last_month_df[last_month_df['day_of_month'] <= today.day]['amount_abs'].sum())
+
+    last_month_dates = []
+    last_month_values = []
+    if not last_month_df.empty:
+        last_daily = last_month_df.groupby('day_of_month')['amount_abs'].sum()
+        running_last = 0.0
+        for d in range(1, days_in_month + 1):
+            running_last += float(last_daily.get(d, 0))
+            last_month_dates.append(pd.Timestamp(date(today.year, today.month, d)))
+            last_month_values.append(round(running_last))
+
     # 예산
     if selected_cat == "전체":
         budget_total = int(budgets_df['monthly_amount'].sum()) if not budgets_df.empty else 0
@@ -389,12 +424,31 @@ def _render_burnrate(df_all):
 
     budget_pct = (current_total / budget_total * 100) if budget_total > 0 else 0
 
-    col1, col2, col3 = st.columns(3)
+    col1, col2, col3, col4 = st.columns(4)
     with col1:
         st.metric("현재 누적 지출", f"{current_total:,}원")
     with col2:
-        st.metric("예상 월말 지출", f"{projected_total:,}원")
+        last_diff = current_total - last_month_total if last_month_total > 0 else None
+        st.metric(
+            "지난달 누적 지출 (현재 기준)",
+            f"{last_month_total:,}원" if last_month_total > 0 else "데이터 없음",
+            delta=f"{last_diff:+,}원" if last_diff is not None else None,
+            delta_color="inverse",
+        )
     with col3:
+        if budget_total > 0:
+            budget_diff = projected_total - budget_total
+            sign = "+" if budget_diff > 0 else ""
+            st.metric(
+                "예상 월말 지출",
+                f"{projected_total:,}원",
+                delta=f"{sign}{budget_diff:,}원 (예산 대비)",
+                delta_color="inverse",
+                help=f"설정 예산: {budget_total:,}원",
+            )
+        else:
+            st.metric("예상 월말 지출", f"{projected_total:,}원", help="설정된 예산이 없습니다.")
+    with col4:
         st.metric("예산 대비 소진율", f"{budget_pct:.1f}%" if budget_total > 0 else "예산 미설정")
 
     if current_total == 0 and projected_total == 0:
@@ -419,9 +473,15 @@ def _render_burnrate(df_all):
         mode='lines', name='실제 누적 지출',
         line=dict(color='#667eea', width=2),
     ))
+    if last_month_dates:
+        fig.add_trace(go.Scatter(
+            x=last_month_dates, y=last_month_values,
+            mode='lines', name='지난달 지출',
+            line=dict(color='#cccccc', width=1.5),
+        ))
     fig.add_trace(go.Scatter(
         x=pred_dates, y=pred_values,
-        mode='lines', name='지출 예측',
+        mode='lines', name='지출 예측 (과거 12개월 기준)',
         line=dict(color='#999999', width=2, dash='dot'),
     ))
     if budget_total > 0:

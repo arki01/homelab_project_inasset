@@ -77,9 +77,17 @@ def _init_db():
                 filename      TEXT PRIMARY KEY,
                 owner         TEXT,
                 snapshot_date TEXT,
-                processed_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                processed_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                status        TEXT DEFAULT 'new'
             )
         """)
+
+        # 마이그레이션: status 컬럼이 없는 기존 DB에 추가 + 기존 행을 'updated'로 표시
+        try:
+            cursor.execute("ALTER TABLE processed_files ADD COLUMN status TEXT DEFAULT 'new'")
+            cursor.execute("UPDATE processed_files SET status = 'updated' WHERE status IS NULL OR status = 'new'")
+        except Exception:
+            pass
 
 def get_connection():
     """데이터베이스 연결 객체를 반환합니다."""
@@ -243,21 +251,21 @@ def has_transactions_in_range(owner: str, start_date: str, end_date: str) -> boo
 
 
 def get_processed_filenames() -> dict:
-    """처리 완료된 파일명 → processed_at 매핑을 반환합니다."""
+    """처리 완료된 파일명 → status 매핑을 반환합니다. {'filename': 'new'|'updated'}"""
     if not os.path.exists(DB_PATH):
         return {}
     with sqlite3.connect(DB_PATH) as conn:
-        cursor = conn.execute("SELECT filename, processed_at FROM processed_files")
+        cursor = conn.execute("SELECT filename, status FROM processed_files")
         return {row[0]: row[1] for row in cursor.fetchall()}
 
 
-def mark_file_processed(filename: str, owner: str, snapshot_date: str):
-    """파일 처리 완료를 기록합니다."""
+def mark_file_processed(filename: str, owner: str, snapshot_date: str, status: str = 'new'):
+    """파일 처리 완료를 기록합니다. status: 'new' | 'updated'"""
     _init_db()
     with sqlite3.connect(DB_PATH) as conn:
         conn.execute(
-            "INSERT OR REPLACE INTO processed_files (filename, owner, snapshot_date) VALUES (?, ?, ?)",
-            (filename, owner, snapshot_date),
+            "INSERT OR REPLACE INTO processed_files (filename, owner, snapshot_date, status) VALUES (?, ?, ?, ?)",
+            (filename, owner, snapshot_date, status),
         )
         conn.commit()
 

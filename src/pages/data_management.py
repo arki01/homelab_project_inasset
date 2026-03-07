@@ -4,6 +4,7 @@ import datetime
 import calendar
 import os
 import io
+import shutil
 import time
 
 from openai import OpenAI
@@ -21,6 +22,7 @@ from utils.file_handler import (
 from utils.ai_agent import map_categories, STANDARD_CATEGORIES, INCOME_CATEGORIES
 
 _OWNER_PASSWORDS = {'형준': '0979', '윤희': '1223'}
+UPDATED_DIR = os.path.join(DOCS_DIR, "updated")
 
 # GPT-4o 가격 기준 (2025)
 _INPUT_PRICE_PER_TOKEN  = 2.50  / 1_000_000   # USD
@@ -122,7 +124,6 @@ def _process_single(file_obj, filename: str, owner: str, start_date, end_date):
 
 def _show_file_table(items: list):
     """파일 목록 요약 테이블 렌더링 (snapshot_date 오름차순)"""
-    has_status = any('is_updated' in it for it in items)
     rows = []
     for it in sorted(items, key=lambda x: x['snapshot_date']):
         row = {
@@ -130,37 +131,23 @@ def _show_file_table(items: list):
             '소유자': it['owner'] or '⚠️ 미감지',
             '기준일': it['snapshot_date'],
             '처리 기간': f"{it.get('resolved_start', it['start_date'])} ~ {it['snapshot_date']}",
+            '상태': '🔄 업데이트됨' if it.get('is_updated') else '🆕 신규',
         }
-        if has_status:
-            row['상태'] = '🔄 업데이트됨' if it.get('is_updated') else '🆕 신규'
         rows.append(row)
     st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
 
-def _is_docs_file_pending(file_item: dict, processed: dict) -> tuple[bool, bool]:
-    """
-    docs/ 파일의 처리 필요 여부를 반환합니다.
+def _move_to_updated(filename: str):
+    """처리 완료된 파일을 docs/Updated/ 폴더로 이동합니다."""
+    os.makedirs(UPDATED_DIR, exist_ok=True)
+    src = os.path.join(DOCS_DIR, filename)
+    dst = os.path.join(UPDATED_DIR, filename)
+    if os.path.exists(dst):
+        stem, ext = os.path.splitext(filename)
+        ts = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
+        dst = os.path.join(UPDATED_DIR, f"{stem}_{ts}{ext}")
+    shutil.move(src, dst)
 
-    Returns:
-        (is_pending, is_updated)
-        - is_pending  : True면 처리 대상
-        - is_updated  : True면 동일 파일명이 재저장된 파일 (mtime > processed_at)
-    """
-    fname = file_item['filename']
-    if fname not in processed:
-        return True, False  # 미처리 신규 파일
-
-    processed_at_str = processed[fname]
-    try:
-        processed_at = datetime.datetime.fromisoformat(processed_at_str)
-    except Exception:
-        return False, False
-
-    file_mtime = file_item.get('mtime')
-    if file_mtime is None:
-        return False, False
-
-    return (file_mtime > processed_at), True
 
 
 def _run_batch(items: list, is_docs: bool = False) -> list:
@@ -628,10 +615,13 @@ def render():
             if st.button("검수 완료 & DB 저장", use_container_width=True, key="docs_rev_save_btn"):
                 combined_edited = pd.concat([edited_exp, edited_inc], ignore_index=True)
                 results = _apply_mapping_and_save(docs_review['parsed_data'], combined_edited)
+                processed = get_processed_filenames()
                 for pd_item in docs_review['parsed_data']:
                     it = pd_item['item']
                     if not pd_item.get('error'):
-                        mark_file_processed(it['filename'], it['owner'], it['snapshot_date'])
+                        status = 'updated' if it['filename'] in processed else 'new'
+                        mark_file_processed(it['filename'], it['owner'], it['snapshot_date'], status)
+                        _move_to_updated(it['filename'])
                 st.session_state['docs_results'] = results
                 st.session_state.pop('docs_review', None)
                 st.rerun()
@@ -644,12 +634,12 @@ def render():
         if st.button("메일 확인", use_container_width=True):
             all_docs = scan_docs_folder()
             processed = get_processed_filenames()
-            pending = []
+            # docs/ 루트에 있는 파일 중 이미 처리 이력이 있는 것은 Updated/로 이동
             for f in all_docs:
-                is_pending, is_updated = _is_docs_file_pending(f, processed)
-                if is_pending:
-                    item = {**f, 'is_updated': is_updated}
-                    pending.append(item)
+                if f['filename'] in processed:
+                    _move_to_updated(f['filename'])
+            all_docs = scan_docs_folder()  # 이동 후 재스캔
+            pending = [{**f, 'is_updated': f['filename'] in processed} for f in all_docs]
             for item in pending:
                 if item['owner']:
                     _fs = datetime.date.fromisoformat(item['start_date'])
@@ -681,10 +671,13 @@ def render():
                             mapping_df, usage = _build_mapping_df(client, parsed_data)
                         if mapping_df.empty:
                             results = _apply_mapping_and_save(parsed_data, mapping_df)
+                            processed = get_processed_filenames()
                             for pd_item in parsed_data:
                                 it = pd_item['item']
                                 if not pd_item.get('error'):
-                                    mark_file_processed(it['filename'], it['owner'], it['snapshot_date'])
+                                    status = 'updated' if it['filename'] in processed else 'new'
+                                    mark_file_processed(it['filename'], it['owner'], it['snapshot_date'], status)
+                                    _move_to_updated(it['filename'])
                             st.session_state['docs_results'] = results
                         else:
                             st.session_state['docs_review'] = {
